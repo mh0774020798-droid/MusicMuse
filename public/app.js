@@ -1,5 +1,7 @@
 import { VERSION, escapeHtml as esc, formatTime, normalizeTrack, videoId, emptyState, sanitizeState, mergeState, moveItem, visibleTracks, toM3U, parseM3U } from './core.js';
 import { loadState, saveState, fileStore } from './storage.js';
+import { parseTikTokURL, isShortTikTokURL, extractTikTokLinks } from './tiktok.js';
+import { TikTokFeed } from './shorts.js';
 
 const $ = id => document.getElementById(id);
 let state = loadState();
@@ -11,10 +13,16 @@ let ytPlayer = null, ytReady = null, ytPlayerReady = null, youtubeLoading = fals
 let lastPositionSave = 0, sleepTimer = null, sleepUntil = 0, installPrompt = null, dialogCleanup = null, toastTimer;
 let currentMedia = $('audio');
 const kindQueries = { live: ' live performance concert', cover: ' acoustic cover', official: ' official music video' };
-const sourceNames = { youtube: 'YouTube', itunes: 'iTunes', local: 'מהמכשיר שלך' };
+const sourceNames = { youtube: 'YouTube', itunes: 'iTunes', local: 'מהמכשיר שלך', tiktok: 'TikTok' };
 const isRemoteTab = () => ['discover', 'live', 'cover', 'official'].includes(tab);
 const track = id => state.tracks[id];
 const button = (action, label, extra = '', cls = 'secondary') => `<button class="${cls}" data-action="${action}" ${extra}>${label}</button>`;
+const shorts = new TikTokFeed($('tiktokView'), {
+  add: () => tikTokLinkDialog(),
+  like: id => toggle('likes', id), save: id => toggle('saved', id),
+  share: id => shareTrack(id), menu: id => trackMenu(id), onPlay: item => recordPlay(item),
+  onActivate: () => { savePosition(); pause(); $('stage').hidden = true; }
+});
 
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, 3800); }
 function persist() {
@@ -61,12 +69,17 @@ function updateSuggestions() {
   $('suggestions').innerHTML = '<span>מתחילים עם</span>' + suggestions.map(x => `<button data-action="search-artist" data-artist="${esc(x)}">${esc(x)}</button>`).join('');
 }
 function setTab(value, playlist = '') {
+  if (tab === 'tiktok' && value !== 'tiktok') shorts.hide();
   tab = value; activePlaylist = playlist; $('localFilter').value = ''; $('genre').value = ''; $('duration').value = 'any'; lastError = ''; showMessage();
   document.querySelectorAll('[data-tab]').forEach(b => { const selected = b.dataset.tab === tab; b.classList.toggle('selected', selected); if (selected) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-  $('filters').hidden = tab === 'playlists' && !activePlaylist;
+  $('filters').hidden = tab === 'tiktok' || (tab === 'playlists' && !activePlaylist);
+  if (tab === 'tiktok') { savePosition(); pause(); $('stage').hidden = true; }
+  $('playerbar').hidden = tab === 'tiktok' || !current;
+  document.body.classList.toggle('has-player', tab !== 'tiktok' && Boolean(current));
   if (!isRemoteTab()) { searchController?.abort(); searchVersion++; loading = false; }
 }
 function currentItems() {
+  if (tab === 'tiktok') return Object.values(state.tracks).filter(x => x.source === 'tiktok').sort((a, b) => b.addedAt - a.addedAt);
   if (tab === 'saved') return state.saved.map(track);
   if (tab === 'liked') return state.likes.map(track);
   if (tab === 'history') return [...new Set(state.history.map(x => x.id))].map(track);
@@ -84,9 +97,17 @@ function card(x) {
   const liked = state.likes.includes(x.id), saved = state.saved.includes(x.id), preview = x.source === 'itunes';
   const artwork = x.artwork ? `<img src="${esc(x.artwork)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="fallback-note">♫</span>';
   const playlist = tab === 'playlists' && activePlaylist;
-  return `<article class="clip ${current?.id === x.id ? 'playing-card' : ''}" data-id="${esc(x.id)}"><div class="clip-head"><div class="creator"><div class="avatar">${x.source === 'local' ? '♫' : x.source === 'youtube' ? '▶' : '♪'}</div><div><b title="${esc(x.artist)}">${esc(x.artist)}</b><small>${esc(x.source === 'local' ? 'ספרייה אישית' : x.genre || (x.publishedAt ? new Date(x.publishedAt).getFullYear() || 'מוזיקה' : 'מוזיקה'))}</small></div></div><span class="source ${x.source}">${esc(sourceNames[x.source])}</span></div><button class="artwork" data-action="play" data-id="${esc(x.id)}" aria-label="${preview ? 'השמעת קטע היכרות' : 'ניגון'}: ${esc(x.title)}">${artwork}<span class="play-overlay">▶</span>${preview ? '<span class="preview-badge">קטע היכרות</span>' : ''}<span class="duration-label">${x.duration ? formatTime(x.duration) : x.source === 'youtube' ? 'וידאו' : 'מקומי'}</span></button><div class="details"><h3 title="${esc(x.title)}">${esc(x.title)}</h3><p>${esc(x.album || x.artist)}</p><div class="tags">${x.tags.slice(0, 2).map(t => `<span class="tag">${esc(t)}</span>`).join('')}${x.views ? `<span class="tag">${new Intl.NumberFormat('he', { notation: 'compact' }).format(x.views)} צפיות</span>` : ''}</div></div>${preview ? `<div class="card-store"><span>provided courtesy of iTunes</span><a class="store-badge" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer"><small>Download on</small> iTunes</a></div>` : ''}<div class="actions"><button class="action ${liked ? 'on' : ''}" data-action="like" data-id="${esc(x.id)}" aria-pressed="${liked}">${liked ? '♥ אהבתי' : '♡ אהבתי'}</button><button class="action ${saved ? 'on' : ''}" data-action="save" data-id="${esc(x.id)}" aria-pressed="${saved}">${saved ? '✓ נשמר' : '＋ שמירה'}</button><button class="action menu-action" data-action="track-menu" data-id="${esc(x.id)}" aria-label="עוד אפשרויות: ${esc(x.title)}">⋯</button>${playlist ? `<button class="action menu-action" data-action="playlist-remove" data-id="${esc(x.id)}" aria-label="הסרה מהפלייליסט">✕</button>` : ''}</div></article>`;
+  return `<article class="clip ${current?.id === x.id ? 'playing-card' : ''}" data-id="${esc(x.id)}"><div class="clip-head"><div class="creator"><div class="avatar">${x.source === 'local' ? '♫' : x.source === 'youtube' ? '▶' : '♪'}</div><div><b title="${esc(x.artist)}">${esc(x.artist)}</b><small>${esc(x.source === 'local' ? 'ספרייה אישית' : x.genre || (x.publishedAt ? new Date(x.publishedAt).getFullYear() || 'מוזיקה' : 'מוזיקה'))}</small></div></div><span class="source ${x.source}">${esc(sourceNames[x.source])}</span></div><button class="artwork" data-action="play" data-id="${esc(x.id)}" aria-label="${preview ? 'השמעת קטע היכרות' : 'ניגון'}: ${esc(x.title)}">${artwork}<span class="play-overlay">▶</span>${preview ? '<span class="preview-badge">קטע היכרות</span>' : ''}<span class="duration-label">${x.duration ? formatTime(x.duration) : x.source === 'youtube' ? 'וידאו' : x.source === 'tiktok' ? 'TikTok' : 'מקומי'}</span></button><div class="details"><h3 title="${esc(x.title)}">${esc(x.title)}</h3><p>${esc(x.album || x.artist)}</p><div class="tags">${x.tags.slice(0, 2).map(t => `<span class="tag">${esc(t)}</span>`).join('')}${x.views ? `<span class="tag">${new Intl.NumberFormat('he', { notation: 'compact' }).format(x.views)} צפיות</span>` : ''}</div></div>${preview ? `<div class="card-store"><span>provided courtesy of iTunes</span><a class="store-badge" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer"><small>Download on</small> iTunes</a></div>` : ''}<div class="actions"><button class="action ${liked ? 'on' : ''}" data-action="like" data-id="${esc(x.id)}" aria-pressed="${liked}">${liked ? '♥ אהבתי' : '♡ אהבתי'}</button><button class="action ${saved ? 'on' : ''}" data-action="save" data-id="${esc(x.id)}" aria-pressed="${saved}">${saved ? '✓ נשמר' : '＋ שמירה'}</button><button class="action menu-action" data-action="track-menu" data-id="${esc(x.id)}" aria-label="עוד אפשרויות: ${esc(x.title)}">⋯</button>${playlist ? `<button class="action menu-action" data-action="playlist-remove" data-id="${esc(x.id)}" aria-label="הסרה מהפלייליסט">✕</button>` : ''}</div></article>`;
 }
 function render() {
+  const isTikTok = tab === 'tiktok';
+  $('feed').hidden = isTikTok; $('tiktokView').hidden = !isTikTok; $('layoutBtn').hidden = isTikTok;
+  if (isTikTok) {
+    const items = filteredItems();
+    $('sectionTitle').textContent = 'אותה מוזיקה. תנועה חדשה.'; $('sectionEyebrow').textContent = 'SCROLL INTO YOUR NEXT FAVORITE';
+    $('resultCount').textContent = `${items.length} סרטונים · גלילה אנכית`; $('loadMore').hidden = true; $('feed').setAttribute('aria-busy', 'false');
+    shorts.render(items, { likes: state.likes, saved: state.saved, reducedMotion: state.settings.reducedMotion }); updateStats(); return;
+  }
   const titles = { discover: query ? `התוצאות של ״${query}״` : 'קצת השראה, הרבה מוזיקה', live: 'האנרגיה של הופעה חיה', cover: 'שירים מוכרים, צליל חדש', official: 'לראות את המוזיקה', saved: 'המוזיקה ששמרת', liked: 'מה שעשה לך טוב', history: 'מה שהתנגן אצלך', local: 'הספרייה מהמכשיר', playlists: activePlaylist ? state.playlists.find(x => x.id === activePlaylist)?.name || 'פלייליסט' : 'האוספים שלך' };
   $('sectionTitle').textContent = titles[tab]; $('sectionEyebrow').textContent = isRemoteTab() ? 'FIND YOUR SOUND' : 'YOUR OWN LITTLE WORLD';
   $('feed').classList.toggle('list', state.settings.layout === 'list'); $('layoutBtn').textContent = state.settings.layout === 'grid' ? '☷' : '▦'; $('layoutBtn').setAttribute('aria-label', state.settings.layout === 'grid' ? 'מעבר לתצוגת רשימה' : 'מעבר לתצוגת כרטיסים');
@@ -115,6 +136,7 @@ function emptyView() {
 }
 async function searchMusic({ append = false, phrase } = {}) {
   const input = phrase ?? $('search').value.trim();
+  if (parseTikTokURL(input) || isShortTikTokURL(input)) { await importTikTok(input); return; }
   if (videoId(input)) { await importVideo(input); return; }
   const baseQuery = input || state.followed[0] || 'אברהם פריד';
   if (!isRemoteTab()) setTab('discover');
@@ -144,6 +166,7 @@ function renderQueue() {
 }
 function addQueue(id, next = false) {
   const item = track(id); if (!item) return;
+  if (item.source === 'tiktok') { toast('סרטוני TikTok מתנגנים בלשונית TikTok, בגלילה מסרטון לסרטון.'); return; }
   if (item.source === 'itunes') { toast('קטעי היכרות זמינים בכרטיס ובחנות. התור מיועד לסרטוני YouTube ולקבצים האישיים שלך.'); return; }
   state.queue = state.queue.filter(x => x !== id);
   if (next && current && state.queue.includes(current.id)) state.queue.splice(state.queue.indexOf(current.id) + 1, 0, id); else if (next) state.queue.unshift(id); else state.queue.push(id);
@@ -174,10 +197,11 @@ function playlistPicker(id) {
 }
 function trackMenu(id) {
   const x = track(id); if (!x) return;
-  const youtubeActions = x.source !== 'itunes' ? `${button('queue-add', '☷ הוספה לתור', `data-id="${esc(id)}"`)}${button('queue-next', '⏭ נגן הבא', `data-id="${esc(id)}"`)}` : '';
+  const youtubeActions = ['youtube', 'local'].includes(x.source) ? `${button('queue-add', '☷ הוספה לתור', `data-id="${esc(id)}"`)}${button('queue-next', '⏭ נגן הבא', `data-id="${esc(id)}"`)}` : '';
   modal('הצליל שלך, הבחירה שלך', `<div class="dialog-track">${x.artwork ? `<img src="${esc(x.artwork)}" alt="">` : ''}<div><b>${esc(x.title)}</b><small>${esc(x.artist)}</small></div></div><div class="track-menu">${youtubeActions}${button('playlist-picker', '＋ הוספה לפלייליסט', `data-id="${esc(id)}"`)}${button('share-track', '↗ העתקת קישור', `data-id="${esc(id)}"`)}${button('search-artist', '⌕ עוד של ' + esc(x.artist), `data-artist="${esc(x.artist)}"`)}${button('follow-artist', state.followed.includes(x.artist) ? '✓ ביטול מעקב אחרי האמן' : '✧ מעקב אחרי האמן', `data-id="${esc(id)}"`)}${x.url ? button('open-track', '↗ פתיחה באתר המקורי', `data-id="${esc(id)}"`) : ''}${tab === 'playlists' && activePlaylist ? `${button('playlist-up', '↑ הזזה למעלה באוסף', `data-id="${esc(id)}"`)}${button('playlist-down', '↓ הזזה למטה באוסף', `data-id="${esc(id)}"`)}` : ''}${button('hide-track', '⊘ הסתרת הפריט מהתצוגות', `data-id="${esc(id)}"`)}${button('block-artist', '⊘ הסתרת האמן מהתצוגות', `data-id="${esc(id)}"`)}${x.source === 'local' ? button('delete-local', 'מחיקת העותק מהדפדפן', `data-id="${esc(id)}"`, 'secondary danger') : ''}</div>`);
 }
 async function importVideo(input) {
+  if (parseTikTokURL(input) || isShortTikTokURL(input)) return importTikTok(input);
   const id = videoId(input);
   if (!id) { toast('יש להזין קישור לסרטון YouTube בודד.'); return; }
   closeDialog(); toast('מוסיפים את הסרטון…');
@@ -187,8 +211,41 @@ async function importVideo(input) {
   remember([data.item]); if (!state.saved.includes(data.item.id)) state.saved.unshift(data.item.id); persist(); setTab('saved'); render(); toast(data.warning || 'הסרטון נוסף לשמורים');
 }
 function addLinkDialog() {
-  modal('צליל טוב שמצאת ברשת?', '<p class="dialog-copy">הדבק קישור לסרטון YouTube כדי לשמור ולנגן אותו כאן. הוספת קישור אינה דורשת מפתח חיפוש.</p><form id="linkForm"><label class="field">קישור לסרטון<input id="videoURL" type="url" dir="ltr" placeholder="https://www.youtube.com/watch?v=…" required></label><button class="primary" type="submit">הוספת הסרטון</button></form>');
+  if (tab === 'tiktok') { tikTokLinkDialog(); return; }
+  modal('צליל טוב שמצאת ברשת?', '<p class="dialog-copy">הדבק קישור לסרטון YouTube או TikTok כדי לשמור ולנגן אותו כאן. סרטוני TikTok יופיעו ברצף גלילה אנכי.</p><form id="linkForm"><label class="field">קישור לסרטון<input id="videoURL" type="url" dir="ltr" placeholder="https://www.youtube.com/watch?v=…" required></label><button class="primary" type="submit">הוספת הסרטון</button></form>');
   $('linkForm').onsubmit = e => { e.preventDefault(); importVideo($('videoURL').value.trim()); }; $('videoURL').focus();
+}
+function tikTokLinkDialog() {
+  shorts.pause();
+  modal('סרטונים טובים מגיעים ברצף', `<p class="dialog-copy">מדביקים קישורי TikTok, וכל סרטון מקבל מקום ברצף הגלילה שלך. אפשר להדביק עד 20 קישורים, בשורות נפרדות.</p><form id="tikTokLinksForm"><label class="field">קישורים לסרטונים<textarea id="tikTokLinks" rows="5" dir="ltr" maxlength="10000" placeholder="https://www.tiktok.com/@artist/video/…" required></textarea></label><div class="dialog-actions"><button class="primary" type="submit">＋ הוספת הסרטונים</button><button class="secondary" type="button" id="tikTokSearchLink">חיפוש ב־TikTok ↗</button></div><p class="form-note">הסרטונים מוצגים בנגן הרשמי. פריטים שתוסיף נשמרים גם בספרייה האישית.</p><p class="form-note" id="tikTokImportStatus" role="status"></p></form>`);
+  $('tikTokSearchLink').onclick = () => openExternal('https://www.tiktok.com/search?q=' + encodeURIComponent($('search').value || 'music'));
+  $('tikTokLinksForm').onsubmit = async event => {
+    event.preventDefault(); const links = extractTikTokLinks($('tikTokLinks').value);
+    if (!links.length) { $('tikTokImportStatus').textContent = 'לא נמצאו קישורי סרטונים תקינים של TikTok.'; return; }
+    const form = event.currentTarget, submit = form.querySelector('[type="submit"]'); submit.disabled = true; $('tikTokImportStatus').textContent = 'מוסיפים את הסרטונים…';
+    try { await importTikTok(links); } finally { if (submit.isConnected) submit.disabled = false; }
+  };
+  $('tikTokLinks').focus();
+}
+async function importTikTok(input) {
+  const links = Array.isArray(input) ? input : extractTikTokLinks(input);
+  if (!links.length) { toast('יש להזין קישור תקין לסרטון TikTok.'); return; }
+  const responses = await Promise.allSettled(links.map(async url => {
+    try { return await api('tiktok', { url }); }
+    catch (error) {
+      const post = parseTikTokURL(url);
+      if (!post || error.code === 'ACCESS_REQUIRED') throw error;
+      return { item: { id: `tiktok:${post.id}`, tiktokId: post.id, source: 'tiktok', title: 'סרטון TikTok', artist: '@' + post.author, url: post.url, tags: ['TikTok'] }, metadataAvailable: false };
+    }
+  }));
+  const added = responses.filter(x => x.status === 'fulfilled').map(x => x.value);
+  const failed = responses.length - added.length;
+  if (!added.length) { const message = responses[0]?.reason?.message || 'לא ניתן להוסיף את הסרטונים. נסה קישור מלא.'; if ($('tikTokImportStatus')) $('tikTokImportStatus').textContent = message; else toast(message); return; }
+  remember(added.map(x => x.item));
+  for (const { item } of added) if (!state.saved.includes(item.id)) state.saved.unshift(item.id);
+  persist(); closeDialog(); setTab('tiktok'); render();
+  shorts.focus(added[0].item.id); $('content').scrollIntoView({ behavior: state.settings.reducedMotion ? 'auto' : 'smooth', block: 'start' });
+  toast(`${added.length} סרטונים נוספו${failed ? ` · ${failed} קישורים לא נוספו` : ''}${added.some(x => !x.metadataAvailable) ? ' · חלקם ללא כותרת; הזמינות תיבדק בנגן' : ''}`);
 }
 async function importFiles(files) {
   const accepted = [...files].filter(f => /^(audio\/|video\/)/.test(f.type) || /\.(mp3|m4a|flac|wav|ogg|aac|opus|mp4|webm)$/i.test(f.name));
@@ -244,6 +301,7 @@ function recordPlay(item) {
 }
 function setPlaying(value) { isPlaying = value; $('playPauseBtn').textContent = value ? 'Ⅱ' : '▶'; $('playPauseBtn').setAttribute('aria-label', value ? 'השהיה' : 'ניגון'); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = value ? 'playing' : 'paused'; }
 function pause() {
+  shorts.pause();
   currentMedia.pause(); if (ytPlayer?.pauseVideo) ytPlayer.pauseVideo(); setPlaying(false);
 }
 function savePosition() {
@@ -257,6 +315,7 @@ function stopPlayer() {
 }
 async function play(id, { forceStart = false } = {}) {
   const item = track(id); if (!item) return;
+  if (item.source === 'tiktok') { setTab('tiktok'); render(); shorts.focus(id); $('content').scrollIntoView({ behavior: state.settings.reducedMotion ? 'auto' : 'smooth' }); return; }
   savePosition(); pause(); const version = ++playVersion; youtubeLoading = false;
   if (activeObjectURL) { URL.revokeObjectURL(activeObjectURL); activeObjectURL = ''; }
   $('audio').removeAttribute('src'); $('audio').load(); $('localVideo').removeAttribute('src'); $('localVideo').load();
@@ -419,7 +478,7 @@ const actions = {
   'rename-playlist': () => { const p = state.playlists.find(x => x.id === activePlaylist); if (p) nameDialog('איך נקרא לאוסף?', p.name, name => { p.name = name; persist(); render(); }); },
   'delete-playlist': () => { const p = state.playlists.find(x => x.id === activePlaylist); if (p) confirmDialog('מחיקת האוסף', `למחוק את ״${p.name}״? השירים עצמם יישארו בספרייה.`, () => { state.playlists = state.playlists.filter(x => x.id !== p.id); persist(); setTab('playlists'); render(); }); },
   'queue-playlist': () => playPlaylist(activePlaylist), 'play-list': el => playPlaylist(el.dataset.playlist),
-  'queue-visible': () => { const ids = filteredItems().filter(x => x.source !== 'itunes').map(x => x.id); state.queue = [...new Set([...state.queue, ...ids])]; persist(); toast(`${ids.length} פריטים הוספו לתור`); },
+  'queue-visible': () => { const ids = filteredItems().filter(x => ['youtube', 'local'].includes(x.source)).map(x => x.id); state.queue = [...new Set([...state.queue, ...ids])]; persist(); toast(`${ids.length} פריטים הוספו לתור`); },
   'export-m3u': () => { const p = state.playlists.find(x => x.id === activePlaylist); if (!p) return; download(toM3U(p.tracks.map(track).filter(Boolean), p.name), p.name.replace(/[<>:"/\\|?*]/g, '-') + '.m3u8', 'audio/x-mpegurl;charset=utf-8'); toast('הקובץ כולל קישורים ושמות קבצים. לא כל נגן חיצוני תומך בקישורי YouTube.'); },
   'import-m3u': () => $('m3uFile').click(), 'import-local': () => $('localFiles').click(),
   'delete-local': el => { const x = track(el.dataset.id); if (x) confirmDialog('מחיקת עותק מקומי', `למחוק את העותק של ״${x.title}״ מהדפדפן? הקובץ המקורי במכשיר לא יימחק.`, async () => { if (current?.id === x.id) stopPlayer(); await fileStore.remove(x.id); removeTrack(x.id); persist(); render(); toast('העותק הוסר מהדפדפן'); }); },
@@ -437,7 +496,7 @@ const actions = {
 };
 async function playPlaylist(id) {
   const p = state.playlists.find(x => x.id === id); if (!p) return;
-  state.queue = p.tracks.filter(id => track(id) && track(id).source !== 'itunes'); persist();
+  state.queue = p.tracks.filter(id => track(id) && ['youtube', 'local'].includes(track(id).source)); persist();
   if (!state.queue.length) { toast('באוסף הזה אין קבצים או סרטונים לתור. קטעי iTunes מושמעים בנפרד מתוך הכרטיס.'); return; }
   closeDialog(); await play(state.queue[0]);
 }
@@ -480,6 +539,14 @@ document.addEventListener('dragleave', () => { if (--dragCount <= 0) { dragCount
 document.addEventListener('drop', e => { if (!e.dataTransfer?.files.length) return; e.preventDefault(); dragCount = 0; $('dropZone').hidden = true; importFiles(e.dataTransfer.files); });
 document.addEventListener('keydown', e => {
   if (e.target.closest('input,textarea,select,[contenteditable=true]') || e.ctrlKey || e.metaKey || e.altKey || $('dialog').open) return;
+  if (e.code === 'Space' && e.target.closest('button,a')) return;
+  if (tab === 'tiktok' && e.key.toLowerCase() === 'm') { e.preventDefault(); shorts.toggleMute(); return; }
+  if (tab === 'tiktok' && ['ArrowDown', 'ArrowUp', 'n', 'N', 'p', 'P', ' '].includes(e.key)) {
+    e.preventDefault();
+    if (e.code === 'Space') shorts.togglePlay();
+    else shorts.navigate(['ArrowDown', 'n', 'N'].includes(e.key) ? 1 : -1);
+    return;
+  }
   if (e.key === '/') { e.preventDefault(); $('search').focus(); } else if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key.toLowerCase() === 'n') skip(1); else if (e.key.toLowerCase() === 'p') skip(-1); else if (e.key.toLowerCase() === 'm') $('muteBtn').click(); else if (e.key.toLowerCase() === 's' && current) toggle('saved', current.id);
   else if (e.key === 'ArrowRight' && current) { e.preventDefault(); seek(Math.min(currentDuration || currentPosition + 10, currentPosition + 10)); } else if (e.key === 'ArrowLeft' && current) { e.preventDefault(); seek(Math.max(0, currentPosition - 10)); }

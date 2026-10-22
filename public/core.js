@@ -1,4 +1,6 @@
-export const VERSION = '2.0.0';
+import { parseTikTokURL } from './tiktok.js';
+
+export const VERSION = '2.1.0';
 export const DEFAULT_SETTINGS = Object.freeze({ source: 'itunes', country: 'IL', layout: 'grid', sort: 'relevance', volume: .75, speed: 1, resume: true, autoNext: true, compact: false, reducedMotion: false });
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export function formatTime(seconds) {
@@ -20,14 +22,15 @@ function safeURL(value, hosts) {
 export function normalizeTrack(value) {
   if (!value || typeof value !== 'object') return null;
   const source = value.source;
-  if (!['youtube', 'itunes', 'local'].includes(source)) return null;
-  let id = text(value.id, 100), url = '', yt = '';
+  if (!['youtube', 'itunes', 'local', 'tiktok'].includes(source)) return null;
+  let id = text(value.id, 100), url = '', yt = '', tt = '';
   if (source === 'youtube') { yt = text(value.videoId) || videoId(value.url); if (!/^[\w-]{11}$/.test(yt)) return null; id = `youtube:${yt}`; url = `https://www.youtube.com/watch?v=${yt}`; }
   if (source === 'itunes') { if (!/^itunes:\d{1,20}$/.test(id)) return null; url = safeURL(value.url, ['apple.com']); if (!url) return null; }
   if (source === 'local' && !/^local:[\w-]{1,80}$/.test(id)) return null;
-  return { id, source, videoId: yt, title: text(value.title) || 'ללא כותרת', artist: text(value.artist) || (source === 'local' ? 'מהמכשיר שלך' : 'אמן לא ידוע'),
+  if (source === 'tiktok') { const post = parseTikTokURL(value.url); if (!post) return null; id = `tiktok:${post.id}`; tt = post.id; url = post.url; }
+  return { id, source, videoId: yt, tiktokId: tt, title: text(value.title) || 'ללא כותרת', artist: text(value.artist) || (source === 'local' ? 'מהמכשיר שלך' : source === 'tiktok' ? 'TikTok' : 'אמן לא ידוע'),
     album: text(value.album), genre: text(value.genre), description: text(value.description, 1500),
-    artwork: safeURL(value.artwork, source === 'youtube' ? ['ytimg.com'] : ['mzstatic.com']),
+    artwork: safeURL(value.artwork, source === 'youtube' ? ['ytimg.com'] : source === 'tiktok' ? ['tiktokcdn.com', 'tiktokcdn-us.com', 'muscdn.com', 'tiktok.com', 'tiktokv.com', 'byteoversea.com', 'ibytedtos.com'] : ['mzstatic.com']),
     previewUrl: source === 'itunes' ? safeURL(value.previewUrl, ['itunes.apple.com']) : '', url,
     duration: Math.max(0, Math.min(Number(value.duration) || 0, 86400 * 7)), views: Math.max(0, Number(value.views) || 0),
     publishedAt: text(value.publishedAt, 40), addedAt: Number(value.addedAt) || Date.now(), fetchedAt: Number(value.fetchedAt) || Date.now(),
@@ -44,7 +47,7 @@ export function sanitizeState(input) {
   }
   const known = id => Object.hasOwn(result.tracks, id);
   for (const field of ['likes', 'saved', 'queue', 'hidden']) result[field] = stringList(input[field]).filter(known);
-  result.queue = result.queue.filter(id => result.tracks[id].source !== 'itunes');
+  result.queue = result.queue.filter(id => ['youtube', 'local'].includes(result.tracks[id].source));
   result.followed = stringList(input.followed, 100); result.blocked = stringList(input.blocked, 100); result.searchHistory = stringList(input.searchHistory, 12).map(x => x.slice(0, 150));
   result.history = (Array.isArray(input.history) ? input.history : []).filter(x => x && known(x.id) && Number.isFinite(x.at)).slice(0, 200).map(x => ({ id: x.id, at: x.at }));
   result.playlists = (Array.isArray(input.playlists) ? input.playlists : []).filter(x => x && /^pl:[\w-]+$/.test(x.id) && typeof x.name === 'string').slice(0, 100).map(x => ({ id: x.id, name: x.name.slice(0, 80), tracks: stringList(x.tracks).filter(known), createdAt: Number(x.createdAt) || Date.now() }));

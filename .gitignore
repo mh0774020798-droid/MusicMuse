@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+!.env.example
+.vercel/
+.openai/
+*.log
+coverage/
+test-results/
+original.html

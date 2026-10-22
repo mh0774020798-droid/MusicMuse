@@ -1,0 +1,15 @@
+{
+  "name": "music-muse",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Hebrew music discovery, official YouTube playback and a private local music library",
+  "type": "module",
+  "engines": { "node": "24.x" },
+  "scripts": {
+    "dev": "node --use-env-proxy --use-system-ca scripts/dev.mjs",
+    "start": "node --use-env-proxy --use-system-ca scripts/dev.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "build": "node scripts/check.mjs"
+  }
+}

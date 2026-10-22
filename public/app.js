@@ -2,6 +2,7 @@ import { VERSION, escapeHtml as esc, formatTime, normalizeTrack, videoId, emptyS
 import { loadState, saveState, fileStore } from './storage.js';
 import { parseTikTokURL, isShortTikTokURL, extractTikTokLinks } from './tiktok.js';
 import { TikTokFeed } from './shorts.js';
+import { initCreatorPromo } from './creator-promo.js';
 
 const $ = id => document.getElementById(id);
 let state = loadState();
@@ -538,7 +539,7 @@ document.addEventListener('dragover', e => { if (e.dataTransfer?.types.includes(
 document.addEventListener('dragleave', () => { if (--dragCount <= 0) { dragCount = 0; $('dropZone').hidden = true; } });
 document.addEventListener('drop', e => { if (!e.dataTransfer?.files.length) return; e.preventDefault(); dragCount = 0; $('dropZone').hidden = true; importFiles(e.dataTransfer.files); });
 document.addEventListener('keydown', e => {
-  if (e.target.closest('input,textarea,select,[contenteditable=true]') || e.ctrlKey || e.metaKey || e.altKey || $('dialog').open) return;
+  if (e.target.closest('input,textarea,select,[contenteditable=true]') || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
   if (e.code === 'Space' && e.target.closest('button,a')) return;
   if (tab === 'tiktok' && e.key.toLowerCase() === 'm') { e.preventDefault(); shorts.toggleMute(); return; }
   if (tab === 'tiktok' && ['ArrowDown', 'ArrowUp', 'n', 'N', 'p', 'P', ' '].includes(e.key)) {
@@ -559,6 +560,7 @@ if ('mediaSession' in navigator) for (const [name, handler] of Object.entries({ 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1', 'terminal.local'].includes(location.hostname))) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 applySettings(); updateSuggestions(); updateStats();
+initCreatorPromo($('creatorPromo'));
 // Remove old unreferenced API metadata after 30 days; user-owned local media is retained.
 const references = new Set([...state.saved, ...state.likes, ...state.queue, ...state.playlists.flatMap(x => x.tracks)]);
 for (const x of Object.values(state.tracks)) if (x.source !== 'local' && !references.has(x.id) && Date.now() - x.fetchedAt > 30 * 86400000) { removeTrack(x.id); }

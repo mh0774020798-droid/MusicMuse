@@ -1,6 +1,6 @@
 import { parseTikTokURL } from './tiktok.js';
 
-export const VERSION = '2.1.0';
+export const VERSION = '2.1.1';
 export const DEFAULT_SETTINGS = Object.freeze({ source: 'itunes', country: 'IL', layout: 'grid', sort: 'relevance', volume: .75, speed: 1, resume: true, autoNext: true, compact: false, reducedMotion: false });
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export function formatTime(seconds) {

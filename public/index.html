@@ -10,6 +10,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/shorts.css">
+  <link rel="stylesheet" href="/creator-promo.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
@@ -41,11 +42,49 @@
       <p class="side-foot">הספרייה וההעדפות פרטיות למכשיר.<br>חיפושים נשלחים לספק שבחרת.</p>
     </aside>
   </div>
-  <footer><span dir="ltr">Music Muse<span class="brand-dot">.</span></span><span>לגלות. לאהוב. להקשיב.</span><button class="small-link" id="helpBtn">עזרה וקיצורי מקשים</button><small>v2.1.0 · מוקד המערכות</small></footer>
+  <footer><span dir="ltr">Music Muse<span class="brand-dot">.</span></span><span>לגלות. לאהוב. להקשיב.</span><button class="small-link" id="helpBtn">עזרה וקיצורי מקשים</button><small>v2.1.1 · מוקד המערכות</small></footer>
 </div>
 <div class="playerbar" id="playerbar" hidden><div class="now-info"><div id="nowArt" class="now-art">♫</div><div><b id="nowTitle">לא מתנגן שיר</b><small id="nowArtist"></small></div><button class="icon-btn" id="nowLike" aria-label="אהבתי את השיר">♡</button></div><div class="transport"><div class="transport-buttons"><button class="icon-btn" id="shuffleBtn" aria-label="ערבוב" aria-pressed="false" title="ערבוב">⤨</button><button class="icon-btn" id="prevBtn" aria-label="הקודם" title="הקודם">⏮</button><button class="play-main" id="playPauseBtn" aria-label="השהיה">Ⅱ</button><button class="icon-btn" id="nextBtn" aria-label="הבא" title="הבא">⏭</button><button class="icon-btn" id="repeatBtn" aria-label="חזרה כבויה" title="חזרה">↻</button></div><div class="progress-row" dir="ltr"><span id="elapsed">0:00</span><input id="seek" type="range" min="0" max="100" step="0.1" value="0" aria-label="מיקום בשיר"><span id="totalTime">0:00</span></div></div><div class="player-options"><button class="icon-btn" id="muteBtn" aria-label="השתקה" title="השתקה">♫</button><input id="volume" type="range" min="0" max="1" step="0.01" aria-label="עוצמת שמע"><label class="sr-only" for="speed">מהירות</label><select id="speed" title="מהירות ניגון"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select><button class="icon-btn" id="sleepBtn" aria-label="טיימר שינה" title="טיימר שינה">◷</button><button class="icon-btn" id="closePlayer" aria-label="עצירת ניגון">✕</button></div><span class="preview-label" id="previewLabel" hidden>קטע היכרות · באדיבות iTunes <a id="previewStoreLink" target="_blank" rel="noopener noreferrer">לשיר המלא בחנות ↗</a></span></div>
 <audio id="audio" preload="none"></audio>
 <dialog id="dialog" aria-labelledby="dialogTitle"><div class="dialog-top"><div><span class="eyebrow" id="dialogEyebrow">MUSIC MUSE</span><h2 id="dialogTitle"></h2></div><button id="closeDialog" class="icon-btn" aria-label="סגירת חלון">✕</button></div><div id="dialogBody"></div></dialog>
+<dialog id="creatorPromo" class="creator-promo" aria-labelledby="creatorPromoTitle" aria-describedby="creatorPromoDescription" data-unlocked="false" closedby="none">
+  <div class="creator-promo-shell">
+    <div class="creator-promo-topline">
+      <span class="creator-promo-badge"><i aria-hidden="true"></i> הכירו את היוצר</span>
+      <button class="creator-promo-close" type="button" data-creator-close disabled aria-label="סגירת חלונית היוצר" title="אפשר לסגור בעוד 5 שניות"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
+    </div>
+    <div class="creator-promo-hero">
+      <div class="creator-promo-copy">
+        <span class="creator-promo-kicker">מאחורי Music Muse</span>
+        <h2 id="creatorPromoTitle" tabindex="-1" autofocus>מוקד <span>המערכות.</span></h2>
+        <p id="creatorPromoDescription" class="creator-promo-description"><strong>מוזיקה טובה מתחילה בחיבור טוב.</strong><br>הכירו את היוצר של האתר, קפצו לפרופיל<br>ותישארו בקשר גם מעבר למוזיקה.</p>
+      </div>
+      <div class="creator-promo-visual" aria-hidden="true">
+        <div class="creator-orbit"></div><div class="creator-orbit creator-orbit-two"></div><div class="creator-orbit creator-orbit-three"></div>
+        <div class="creator-monogram"><b>מ.</b><small>THE CREATOR</small></div>
+        <span class="creator-float creator-float-code">&lt;/&gt;</span><span class="creator-float creator-float-note">♫</span>
+        <div class="creator-promo-signature"><span class="equalizer"><i></i><i></i><i></i><i></i></span><b>MUSIC MUSE</b></div>
+      </div>
+    </div>
+    <div class="creator-promo-links">
+      <a class="creator-profile" href="https://mitmachim.top/user/%D7%9E%D7%95%D7%A7%D7%93-%D7%94%D7%9E%D7%A2%D7%A8%D7%9B%D7%95%D7%AA" target="_blank" rel="noopener noreferrer" aria-label="כניסה לפרופיל מוקד המערכות במתמחים טופ — נפתח בלשונית חדשה">
+        <span class="creator-profile-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 0 1-8 8H6l-4 3v-8a8 8 0 1 1 18-3Z"/><path d="M7 10h8M7 14h5"/></svg></span>
+        <span><b>מתמחים טופ</b><small>הפרופיל שלי בקהילה</small></span><span class="creator-profile-arrow" aria-hidden="true">↗</span>
+      </a>
+      <a class="creator-profile creator-profile-bina" href="https://bina.top/user/%D7%9E%D7%95%D7%A7%D7%93-%D7%94%D7%9E%D7%A2%D7%A8%D7%9B%D7%95%D7%AA" target="_blank" rel="noopener noreferrer" aria-label="כניסה לפרופיל מוקד המערכות בבינה טופ — נפתח בלשונית חדשה">
+        <span class="creator-profile-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3Z"/><path d="m20 2 .6 1.4L22 4l-1.4.6L20 6l-.6-1.4L18 4l1.4-.6L20 2Z"/></svg></span>
+        <span><b>בינה טופ</b><small>נפגשים גם בעולם הבינה</small></span><span class="creator-profile-arrow" aria-hidden="true">↗</span>
+      </a>
+    </div>
+    <a class="creator-promo-email" href="mailto:MH0774020798@GMAIL.COM"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 7 8 6 8-6"/></svg><span>רעיון, שאלה, או פשוט שלום?</span><span dir="ltr">MH0774020798@GMAIL.COM</span></a>
+    <div class="creator-promo-bottom">
+      <p class="creator-promo-status" data-creator-status role="status" aria-live="polite" aria-atomic="true">אפשר להמשיך בעוד 5 שניות</p>
+      <button class="creator-promo-continue" type="button" data-creator-close disabled aria-describedby="creatorPromoWait"><span data-creator-label>עוד רגע, נכנסים</span><span class="creator-promo-count" data-creator-countdown aria-hidden="true">5</span><span class="creator-promo-continue-arrow" aria-hidden="true">←</span></button>
+    </div>
+    <span id="creatorPromoWait" class="sr-only">הסגירה זמינה אחרי חמש שניות מהפתיחה.</span>
+    <div class="creator-promo-progress" aria-hidden="true"><span></span></div>
+  </div>
+</dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 <input id="localFiles" class="sr-only" type="file" accept="audio/*,video/mp4,video/webm,video/ogg,.mp3,.m4a,.flac,.wav,.ogg,.aac,.opus" multiple tabindex="-1">
 <input id="backupFile" class="sr-only" type="file" accept="application/json,.json" tabindex="-1">

@@ -1,4 +1,6 @@
 import { ApiError, authorize, rateLimit, getKey, validateSearch, searchMusic, checkConnections, videoInfo, tikTokInfo } from '../lib/providers.js';
+import { discoverYouTube } from '../lib/discovery.js';
+import { discoveryTracks } from '../public/discovery.js';
 
 export async function handleRequest(request, { env = process.env, fetcher = fetch } = {}) {
   const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' };
@@ -10,8 +12,12 @@ export async function handleRequest(request, { env = process.env, fetcher = fetc
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/$/, '') === '/api' && url.searchParams.has('route') ? '/api/' + url.searchParams.get('route') : url.pathname.replace(/\/$/, '');
     if (path === '/api/tiktok') return send(await tikTokInfo(url.searchParams.get('url') || '', fetcher));
+    if (path === '/api/feed') {
+      const feed = await discoverYouTube(fetcher);
+      return send({ items: [...feed.items, ...discoveryTracks('tiktok')], youtubeMode: feed.mode, tiktokMode: 'selection', channelsAvailable: feed.channelsAvailable, checkedAt: feed.checkedAt });
+    }
     const key = getKey(request, env);
-    if (path === '/api/config') return send({ version: '2.2.0', youtubeConfigured: Boolean(key), youtubeSearchMode: key ? 'api' : 'collection', automaticDiscovery: true, accessProtected: Boolean(env.APP_ACCESS_TOKEN) });
+    if (path === '/api/config') return send({ version: '2.3.0', youtubeConfigured: Boolean(key), youtubeSearchMode: key ? 'api' : 'collection', automaticDiscovery: true, accessProtected: Boolean(env.APP_ACCESS_TOKEN) });
     if (path === '/api/health') return send(await checkConnections(key, fetcher));
     if (path === '/api/search') return send(await searchMusic(validateSearch(url.searchParams), key, fetcher));
     if (path === '/api/video') return send(await videoInfo(url.searchParams.get('url') || '', fetcher));

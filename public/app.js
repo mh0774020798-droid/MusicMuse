@@ -3,16 +3,21 @@ import { loadState, saveState, fileStore } from './storage.js';
 import { parseTikTokURL, isShortTikTokURL, extractTikTokLinks } from './tiktok.js';
 import { TikTokFeed } from './shorts.js';
 import { initCreatorPromo } from './creator-promo.js';
-import { DISCOVERY_ITEMS, seedDiscovery, searchCollection } from './discovery.js';
+import { DISCOVERY_ITEMS, discoveryTracks, seedDiscovery, searchCollection } from './discovery.js';
+import { YouTubeFeed } from './watch-feed.js';
+import { loadYouTubeAPI as ytAPI } from './youtube.js';
+import { orderFeed, channelFeedEntries } from './feed-order.js';
 
 const $ = id => document.getElementById(id);
 let state = loadState();
 if (seedDiscovery(state)) saveState(state);
-let tab = 'discover', activePlaylist = '', results = [], query = '', loading = false, nextPage = null, nextOffset = null, total = 0;
+let tab = 'watch', activePlaylist = '', results = [], query = '', loading = false, nextPage = null, nextOffset = null, total = 0;
+let watchIds = orderFeed(discoveryTracks('youtube'), state.history, state.followed).map(x => x.id), watchRefreshing = false, feedNote = 'מוכן לצפייה';
+const playlistIds = new Set();
 let searchController, searchVersion = 0, lastSearch = null, lastError = '', storageWarning = false;
 let accessToken = '', healthReport = null, configured = false, accessProtected = false, collectionMode = true;
 let current = null, isPlaying = false, currentPosition = 0, currentDuration = 0, queueIndex = -1;
-let ytPlayer = null, ytReady = null, ytPlayerReady = null, youtubeLoading = false, playVersion = 0, activeObjectURL = '', repeat = 'off', shuffle = false;
+let ytPlayer = null, ytPlayerReady = null, youtubeLoading = false, playVersion = 0, activeObjectURL = '', repeat = 'off', shuffle = false;
 let lastPositionSave = 0, sleepTimer = null, sleepUntil = 0, installPrompt = null, dialogCleanup = null, toastTimer;
 let currentMedia = $('audio');
 const kindQueries = { live: ' live performance concert', cover: ' acoustic cover', official: ' official music video' };
@@ -22,9 +27,17 @@ const track = id => state.tracks[id];
 const button = (action, label, extra = '', cls = 'secondary') => `<button class="${cls}" data-action="${action}" ${extra}>${label}</button>`;
 const shorts = new TikTokFeed($('tiktokView'), {
   add: () => tikTokLinkDialog(),
+  youtube: () => { setTab('watch'); render(); },
   settings,
   like: id => toggle('likes', id), save: id => toggle('saved', id),
   share: id => shareTrack(id), menu: id => trackMenu(id), onPlay: item => recordPlay(item),
+  onActivate: () => { savePosition(); pause(); $('stage').hidden = true; }
+});
+const watchFeed = new YouTubeFeed($('watchView'), {
+  like: id => toggle('likes', id), save: id => toggle('saved', id), menu: id => trackMenu(id),
+  settings, refresh: refreshViewingFeed, onPlay: item => { if (!track(item.id)) remember([item]); recordPlay(track(item.id)); },
+  onItem: item => { if (!track(item.id) || track(item.id).title.startsWith('סרטון מערוץ ')) remember([item]); return track(item.id); },
+  onDiscover: items => { for (const item of items) playlistIds.add(item.id); remember(items.filter(item => !track(item.id))); watchIds = [...new Set([...watchIds, ...items.map(x => x.id)])]; persist(); if (tab === 'watch') render(); },
   onActivate: () => { savePosition(); pause(); $('stage').hidden = true; }
 });
 
@@ -48,6 +61,7 @@ function updateStats() {
   renderQueue();
 }
 function applySettings() {
+  watchFeed.autoNext = state.settings.autoNext; watchFeed.reducedMotion = state.settings.reducedMotion; shorts.reducedMotion = state.settings.reducedMotion;
   $('source').value = state.settings.source; $('sort').value = state.settings.sort;
   $('volume').value = state.settings.volume; $('speed').value = state.settings.speed;
   document.body.classList.toggle('compact', state.settings.compact); document.body.classList.toggle('reduced-motion', state.settings.reducedMotion);
@@ -73,16 +87,20 @@ function updateSuggestions() {
   $('suggestions').innerHTML = '<span>מתחילים עם</span>' + suggestions.map(x => `<button data-action="search-artist" data-artist="${esc(x)}">${esc(x)}</button>`).join('');
 }
 function setTab(value, playlist = '') {
+  const changed = tab !== value;
   if (tab === 'tiktok' && value !== 'tiktok') shorts.hide();
+  if (tab === 'watch' && value !== 'watch') watchFeed.hide();
   tab = value; activePlaylist = playlist; $('localFilter').value = ''; $('genre').value = ''; $('duration').value = 'any'; lastError = ''; showMessage();
   document.querySelectorAll('[data-tab]').forEach(b => { const selected = b.dataset.tab === tab; b.classList.toggle('selected', selected); if (selected) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
-  $('filters').hidden = tab === 'tiktok' || (tab === 'playlists' && !activePlaylist);
-  if (tab === 'tiktok') { savePosition(); pause(); $('stage').hidden = true; }
-  $('playerbar').hidden = tab === 'tiktok' || !current;
-  document.body.classList.toggle('has-player', tab !== 'tiktok' && Boolean(current));
+  const viewing = ['watch', 'tiktok'].includes(tab);
+  $('filters').hidden = viewing || (tab === 'playlists' && !activePlaylist);
+  if (viewing && changed) { savePosition(); pause(); $('stage').hidden = true; }
+  $('playerbar').hidden = viewing || !current;
+  document.body.classList.toggle('has-player', !viewing && Boolean(current));
   if (!isRemoteTab()) { searchController?.abort(); searchVersion++; loading = false; }
 }
 function currentItems() {
+  if (tab === 'watch') return [...channelFeedEntries(), ...watchIds.map(track)];
   if (tab === 'tiktok') return Object.values(state.tracks).filter(x => x.source === 'tiktok').sort((a, b) => b.addedAt - a.addedAt);
   if (tab === 'saved') return state.saved.map(track);
   if (tab === 'liked') return state.likes.map(track);
@@ -104,8 +122,17 @@ function card(x) {
   return `<article class="clip ${current?.id === x.id ? 'playing-card' : ''}" data-id="${esc(x.id)}"><div class="clip-head"><div class="creator"><div class="avatar">${x.source === 'local' ? '♫' : x.source === 'youtube' ? '▶' : '♪'}</div><div><b title="${esc(x.artist)}">${esc(x.artist)}</b><small>${esc(x.source === 'local' ? 'ספרייה אישית' : x.genre || (x.publishedAt ? new Date(x.publishedAt).getFullYear() || 'מוזיקה' : 'מוזיקה'))}</small></div></div><span class="source ${x.source}">${esc(sourceNames[x.source])}</span></div><button class="artwork" data-action="play" data-id="${esc(x.id)}" aria-label="${preview ? 'השמעת קטע היכרות' : 'ניגון'}: ${esc(x.title)}">${artwork}<span class="play-overlay">▶</span>${preview ? '<span class="preview-badge">קטע היכרות</span>' : ''}<span class="duration-label">${x.duration ? formatTime(x.duration) : x.source === 'youtube' ? 'וידאו' : x.source === 'tiktok' ? 'TikTok' : 'מקומי'}</span></button><div class="details"><h3 title="${esc(x.title)}">${esc(x.title)}</h3><p>${esc(x.album || x.artist)}</p><div class="tags">${x.tags.slice(0, 2).map(t => `<span class="tag">${esc(t)}</span>`).join('')}${x.views ? `<span class="tag">${new Intl.NumberFormat('he', { notation: 'compact' }).format(x.views)} צפיות</span>` : ''}</div></div>${preview ? `<div class="card-store"><span>provided courtesy of iTunes</span><a class="store-badge" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer"><small>Download on</small> iTunes</a></div>` : ''}<div class="actions"><button class="action ${liked ? 'on' : ''}" data-action="like" data-id="${esc(x.id)}" aria-pressed="${liked}">${liked ? '♥ אהבתי' : '♡ אהבתי'}</button><button class="action ${saved ? 'on' : ''}" data-action="save" data-id="${esc(x.id)}" aria-pressed="${saved}">${saved ? '✓ נשמר' : '＋ שמירה'}</button><button class="action menu-action" data-action="track-menu" data-id="${esc(x.id)}" aria-label="עוד אפשרויות: ${esc(x.title)}">⋯</button>${playlist ? `<button class="action menu-action" data-action="playlist-remove" data-id="${esc(x.id)}" aria-label="הסרה מהפלייליסט">✕</button>` : ''}</div></article>`;
 }
 function render() {
-  const isTikTok = tab === 'tiktok';
-  $('feed').hidden = isTikTok; $('tiktokView').hidden = !isTikTok; $('layoutBtn').hidden = isTikTok;
+  const isTikTok = tab === 'tiktok', isWatch = tab === 'watch';
+  document.body.classList.toggle('watch-mode', isTikTok || isWatch);
+  $('feed').hidden = isTikTok || isWatch; $('watchView').hidden = !isWatch; $('tiktokView').hidden = !isTikTok; $('layoutBtn').hidden = isTikTok || isWatch;
+  if (isWatch) {
+    const items = filteredItems();
+    $('sectionTitle').textContent = 'פחות לחפש. יותר לגלות.'; $('sectionEyebrow').textContent = 'YOUR NEXT FAVORITE';
+    $('resultCount').textContent = `${items.filter(x => !x.channelId).length} סרטונים · YouTube · ${playlistIds.size ? 'רשימות הערוצים נטענו אוטומטית' : feedNote}${watchRefreshing ? ' · מעדכנים…' : ''}`;
+    $('loadMore').hidden = true; $('feed').setAttribute('aria-busy', 'false');
+    watchFeed.render(items, { likes: state.likes, saved: state.saved, hidden: state.hidden, reducedMotion: state.settings.reducedMotion, autoNext: state.settings.autoNext });
+    updateStats(); return;
+  }
   if (isTikTok) {
     const items = filteredItems();
     $('sectionTitle').textContent = 'אותה מוזיקה. תנועה חדשה.'; $('sectionEyebrow').textContent = 'SCROLL INTO YOUR NEXT FAVORITE';
@@ -131,6 +158,21 @@ function render() {
   $('feed').innerHTML = toolbar + (items.length ? items.map(card).join('') : emptyView());
   if (toolbar) $('feed').querySelector('.pl-toolbar').style.gridColumn = '1 / -1';
   updateStats();
+}
+async function refreshViewingFeed() {
+  if (watchRefreshing) return;
+  watchRefreshing = true;
+  if (['watch', 'tiktok'].includes(tab)) render();
+  try {
+    const data = await api('feed'); remember(data.items);
+    const incoming = orderFeed(data.items, state.history, state.followed).map(x => x.id);
+    watchIds = [...new Set([...watchIds.filter(id => incoming.includes(id) || playlistIds.has(id)), ...incoming])];
+    feedNote = data.youtubeMode === 'channels' ? 'מתעדכן מערוצי המוזיקה' : 'בחירת האתר · עדכון הערוצים אינו זמין כרגע';
+    persist();
+  } catch (error) {
+    feedNote = 'בחירת האתר · עדכון הערוצים אינו זמין כרגע';
+    if (error.code === 'ACCESS_REQUIRED') accessProtected = true;
+  } finally { watchRefreshing = false; if (['watch', 'tiktok'].includes(tab)) render(); }
 }
 function emptyView() {
   if (lastError && isRemoteTab()) return `<div class="empty"><div class="empty-icon">⌁</div><h3>החיפוש לא הושלם</h3><p>${esc(lastError)}</p>${button('retry', 'ניסיון נוסף', '', 'primary')}${button('connections', 'הגדרות חיבור')}</div>`;
@@ -286,18 +328,6 @@ function removeTrack(id) {
   state.history = state.history.filter(x => x.id !== id); for (const p of state.playlists) p.tracks = p.tracks.filter(x => x !== id); delete state.positions[id]; results = results.filter(x => x !== id);
 }
 
-function ytAPI() {
-  if (window.YT?.Player) return Promise.resolve();
-  if (ytReady) return ytReady;
-  ytReady = new Promise((resolve, reject) => {
-    const script = document.createElement('script'); script.src = 'https://www.youtube.com/iframe_api'; script.id = 'youtube-api-script';
-    const timer = setTimeout(() => { script.remove(); ytReady = null; reject(new Error('נגן YouTube לא נטען. בדוק חיבור או סינון של YouTube.')); }, 12000);
-    window.onYouTubeIframeAPIReady = () => { clearTimeout(timer); resolve(); };
-    script.onerror = () => { clearTimeout(timer); script.remove(); ytReady = null; reject(new Error('לא ניתן לטעון את הנגן הרשמי של YouTube.')); };
-    document.head.append(script);
-  });
-  return ytReady;
-}
 async function ensureYouTubePlayer() {
   await ytAPI();
   if (ytPlayerReady) return ytPlayerReady;
@@ -320,6 +350,7 @@ function recordPlay(item) {
 function setPlaying(value) { isPlaying = value; $('playPauseBtn').textContent = value ? 'Ⅱ' : '▶'; $('playPauseBtn').setAttribute('aria-label', value ? 'השהיה' : 'ניגון'); if ('mediaSession' in navigator) navigator.mediaSession.playbackState = value ? 'playing' : 'paused'; }
 function pause() {
   shorts.pause();
+  watchFeed.pause();
   currentMedia.pause(); if (ytPlayer?.pauseVideo) ytPlayer.pauseVideo(); setPlaying(false);
 }
 function savePosition() {
@@ -334,6 +365,7 @@ function stopPlayer() {
 async function play(id, { forceStart = false } = {}) {
   const item = track(id); if (!item) return;
   if (item.source === 'tiktok') { setTab('tiktok'); render(); shorts.focus(id); $('content').scrollIntoView({ behavior: state.settings.reducedMotion ? 'auto' : 'smooth' }); return; }
+  if (['watch', 'tiktok'].includes(tab)) { setTab('discover'); render(); }
   savePosition(); pause(); const version = ++playVersion; youtubeLoading = false;
   if (activeObjectURL) { URL.revokeObjectURL(activeObjectURL); activeObjectURL = ''; }
   $('audio').removeAttribute('src'); $('audio').load(); $('localVideo').removeAttribute('src'); $('localVideo').load();
@@ -446,7 +478,7 @@ async function readM3U(file) {
   remember(items); const p = { id: 'pl:' + crypto.randomUUID(), name: file.name.replace(/\.m3u8?$/i, ''), tracks: items.map(x => x.id), createdAt: Date.now() }; state.playlists.push(p); persist(); setTab('playlists', p.id); render(); $('m3uFile').value = ''; toast(`${items.length} סרטונים יובאו. שורות אחרות לא יובאו.`);
 }
 function settings() {
-  modal('המקום שלך, בדרך שלך', `<label class="field">אזור חיפוש<select id="countrySetting">${[['IL', 'ישראל'], ['US', 'ארצות הברית'], ['GB', 'בריטניה'], ['FR', 'צרפת'], ['CA', 'קנדה']].map(([id, label]) => `<option value="${id}" ${state.settings.country === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="check-field"><input id="resumeSetting" type="checkbox" ${state.settings.resume ? 'checked' : ''}>המשך מהמקום שעצרתי בקבצים וב־YouTube</label><label class="check-field"><input id="nextSetting" type="checkbox" ${state.settings.autoNext ? 'checked' : ''}>מעבר אוטומטי לפריט הבא בתור</label><label class="check-field"><input id="compactSetting" type="checkbox" ${state.settings.compact ? 'checked' : ''}>תצוגה קומפקטית</label><label class="check-field"><input id="motionSetting" type="checkbox" ${state.settings.reducedMotion ? 'checked' : ''}>צמצום תנועה ואנימציות</label><div class="dialog-actions">${button('connections', 'בדיקת זמינות השירותים')}${button('export-backup', '↓ ייצוא גיבוי')}${button('import-backup', '↑ ייבוא גיבוי')}</div><p class="form-note">גיבוי JSON שומר פלייליסטים והעדפות, ללא קבצים או מפתחות. קבצים מיובאים נשמרים בדפדפן הזה; מחיקת נתוני האתר עלולה למחוק אותם.</p><section class="settings-section"><h3>אמנים במעקב</h3><div class="manage-list">${state.followed.map((x, i) => `<button data-action="unfollow" data-index="${i}">${esc(x)} ✕</button>`).join('') || '<p>אפשר לעקוב אחרי אמן מתפריט של שיר.</p>'}</div></section><section class="settings-section"><h3>ניהול התוכן</h3><p>${state.hidden.length} פריטים מוסתרים · ${state.blocked.length} אמנים מוסתרים</p><div class="dialog-actions">${button('unhide-all', 'הצגת כל הפריטים המוסתרים')}${button('unblock-all', 'הצגת כל האמנים')}${button('clear-history', 'ניקוי היסטוריית ניגון')}${button('clear-search', 'ניקוי חיפושים אחרונים')}</div></section><section class="settings-section"><h3>נתוני המכשיר</h3><p id="storageEstimate">בודקים מקום פנוי…</p><div class="dialog-actions">${button('reset-data', 'איפוס הספרייה וההעדפות', '', 'secondary danger')}</div></section>`);
+  modal('המקום שלך, בדרך שלך', `<label class="field">אזור חיפוש<select id="countrySetting">${[['IL', 'ישראל'], ['US', 'ארצות הברית'], ['GB', 'בריטניה'], ['FR', 'צרפת'], ['CA', 'קנדה']].map(([id, label]) => `<option value="${id}" ${state.settings.country === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="check-field"><input id="resumeSetting" type="checkbox" ${state.settings.resume ? 'checked' : ''}>המשך מהמקום שעצרתי בקבצים וב־YouTube</label><label class="check-field"><input id="nextSetting" type="checkbox" ${state.settings.autoNext ? 'checked' : ''}>מעבר אוטומטי לסרטון הבא בפיד ובתור</label><label class="check-field"><input id="compactSetting" type="checkbox" ${state.settings.compact ? 'checked' : ''}>תצוגה קומפקטית</label><label class="check-field"><input id="motionSetting" type="checkbox" ${state.settings.reducedMotion ? 'checked' : ''}>צמצום תנועה ואנימציות</label><div class="dialog-actions">${button('connections', 'בדיקת זמינות השירותים')}${button('export-backup', '↓ ייצוא גיבוי')}${button('import-backup', '↑ ייבוא גיבוי')}</div><p class="form-note">גיבוי JSON שומר פלייליסטים והעדפות, ללא קבצים או מפתחות. קבצים מיובאים נשמרים בדפדפן הזה; מחיקת נתוני האתר עלולה למחוק אותם.</p><section class="settings-section"><h3>אמנים במעקב</h3><div class="manage-list">${state.followed.map((x, i) => `<button data-action="unfollow" data-index="${i}">${esc(x)} ✕</button>`).join('') || '<p>אפשר לעקוב אחרי אמן מתפריט של שיר.</p>'}</div></section><section class="settings-section"><h3>ניהול התוכן</h3><p>${state.hidden.length} פריטים מוסתרים · ${state.blocked.length} אמנים מוסתרים</p><div class="dialog-actions">${button('unhide-all', 'הצגת כל הפריטים המוסתרים')}${button('unblock-all', 'הצגת כל האמנים')}${button('clear-history', 'ניקוי היסטוריית ניגון')}${button('clear-search', 'ניקוי חיפושים אחרונים')}</div></section><section class="settings-section"><h3>נתוני המכשיר</h3><p id="storageEstimate">בודקים מקום פנוי…</p><div class="dialog-actions">${button('reset-data', 'איפוס הספרייה וההעדפות', '', 'secondary danger')}</div></section>`);
   $('countrySetting').onchange = e => { state.settings.country = e.target.value; persist(); toast('אזור החיפוש עודכן. השינוי יחול בחיפוש הבא.'); };
   for (const [id, field] of [['resumeSetting', 'resume'], ['nextSetting', 'autoNext'], ['compactSetting', 'compact'], ['motionSetting', 'reducedMotion']]) $(id).onchange = e => { state.settings[field] = e.target.checked; persist(); applySettings(); };
   navigator.storage?.estimate?.().then(e => { if ($('storageEstimate')) $('storageEstimate').textContent = `בשימוש בדפדפן: ${Math.round((e.usage || 0) / 1024 / 1024)}MB · מכסה משוערת: ${Math.round((e.quota || 0) / 1024 / 1024)}MB`; }).catch(() => { if ($('storageEstimate')) $('storageEstimate').textContent = 'הדפדפן אינו מאפשר להעריך את המקום הפנוי.'; });
@@ -501,7 +533,7 @@ const actions = {
   'export-m3u': () => { const p = state.playlists.find(x => x.id === activePlaylist); if (!p) return; download(toM3U(p.tracks.map(track).filter(Boolean), p.name), p.name.replace(/[<>:"/\\|?*]/g, '-') + '.m3u8', 'audio/x-mpegurl;charset=utf-8'); toast('הקובץ כולל קישורים ושמות קבצים. לא כל נגן חיצוני תומך בקישורי YouTube.'); },
   'import-m3u': () => $('m3uFile').click(), 'import-local': () => $('localFiles').click(),
   'delete-local': el => { const x = track(el.dataset.id); if (x) confirmDialog('מחיקת עותק מקומי', `למחוק את העותק של ״${x.title}״ מהדפדפן? הקובץ המקורי במכשיר לא יימחק.`, async () => { if (current?.id === x.id) stopPlayer(); await fileStore.remove(x.id); removeTrack(x.id); persist(); render(); toast('העותק הוסר מהדפדפן'); }); },
-  'go-discover': () => { setTab('discover'); state.settings.source = 'youtube'; $('source').value = 'youtube'; persist(); return searchMusic({ phrase: '' }); }, 'retry': () => searchMusic(lastSearch || {}),
+  'go-discover': () => { setTab('watch'); render(); }, 'retry': () => searchMusic(lastSearch || {}),
   'clear-filters': () => { $('localFilter').value = ''; $('duration').value = 'any'; $('genre').value = ''; render(); },
   connections, 'help-connections': () => help(true), 'export-backup': exportBackup,
   'import-backup': () => $('backupFile').click(), 'close-dialog': closeDialog,
@@ -510,7 +542,7 @@ const actions = {
   'unhide-all': () => { state.hidden = []; persist(); render(); settings(); }, 'unblock-all': () => { state.blocked = []; persist(); render(); settings(); },
   'clear-history': () => confirmDialog('ניקוי היסטוריית הניגון', 'הפעולה תמחק את רשימת הפריטים שהתנגנו במכשיר הזה.', () => { state.history = []; persist(); render(); toast('היסטוריית הניגון נוקתה'); }),
   'clear-search': () => { state.searchHistory = []; persist(); updateSuggestions(); toast('החיפושים האחרונים נוקו'); },
-  'reset-data': () => confirmDialog('איפוס הספרייה במכשיר הזה', 'כל הפלייליסטים, השמורים, ההעדפות והעותקים של קובצי המדיה בדפדפן יימחקו. מומלץ לייצא גיבוי תחילה. הקבצים המקוריים במכשיר אינם מושפעים.', async () => { stopPlayer(); await fileStore.clear(); state = emptyState(); seedDiscovery(state); persist(); applySettings(); updateSuggestions(); setSleep(0); setTab('discover'); results = []; await searchMusic({ phrase: '' }); toast('נתוני הספרייה אופסו'); }),
+  'reset-data': () => confirmDialog('איפוס הספרייה במכשיר הזה', 'כל הפלייליסטים, השמורים, ההעדפות והעותקים של קובצי המדיה בדפדפן יימחקו. מומלץ לייצא גיבוי תחילה. הקבצים המקוריים במכשיר אינם מושפעים.', async () => { stopPlayer(); await fileStore.clear(); state = emptyState(); seedDiscovery(state); persist(); applySettings(); updateSuggestions(); setSleep(0); watchIds = orderFeed(discoveryTracks('youtube')).map(x => x.id); setTab('watch'); results = []; render(); refreshViewingFeed(); toast('נתוני הספרייה אופסו'); }),
   'set-sleep': el => setSleep(Number(el.dataset.minutes)), 'cancel-sleep': () => setSleep(0)
 };
 async function playPlaylist(id) {
@@ -533,8 +565,8 @@ $('duration').onchange = () => { if (isRemoteTab() && state.settings.source === 
 $('genre').onchange = render; $('localFilter').oninput = render;
 $('layoutBtn').onclick = () => { state.settings.layout = state.settings.layout === 'grid' ? 'list' : 'grid'; persist(); render(); };
 $('loadMore').onclick = () => searchMusic({ append: true });
-$('homeBtn').onclick = () => { setTab('discover'); state.settings.source = 'youtube'; $('source').value = 'youtube'; persist(); searchMusic({ phrase: '' }); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-$('discoverBtn').onclick = () => { setTab('discover'); searchMusic({ phrase: state.followed[0] || '' }); $('search').focus(); };
+$('homeBtn').onclick = () => { setTab('watch'); render(); window.scrollTo({ top: 0, behavior: state.settings.reducedMotion ? 'auto' : 'smooth' }); };
+$('discoverBtn').onclick = () => { setTab('watch'); render(); };
 $('savedTop').onclick = () => { setTab('saved'); render(); $('content').scrollIntoView({ behavior: 'smooth' }); };
 $('connectionBtn').onclick = connections; $('settingsBtn').onclick = settings; $('helpBtn').onclick = () => help(); $('tasteBtn').onclick = taste; $('addLinkBtn').onclick = addLinkDialog;
 $('importLocalTop').onclick = () => $('localFiles').click(); $('localFiles').onchange = e => importFiles(e.target.files);
@@ -560,6 +592,13 @@ document.addEventListener('drop', e => { if (!e.dataTransfer?.files.length) retu
 document.addEventListener('keydown', e => {
   if (e.target.closest('input,textarea,select,[contenteditable=true]') || e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
   if (e.code === 'Space' && e.target.closest('button,a')) return;
+  if (tab === 'watch' && e.key.toLowerCase() === 'm') { e.preventDefault(); watchFeed.toggleMute(); return; }
+  if (tab === 'watch' && ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'n', 'N', 'p', 'P', ' '].includes(e.key)) {
+    e.preventDefault();
+    if (e.code === 'Space') watchFeed.togglePlay();
+    else watchFeed.navigate(['ArrowDown', 'PageDown', 'n', 'N'].includes(e.key) ? 1 : -1);
+    return;
+  }
   if (tab === 'tiktok' && e.key.toLowerCase() === 'm') { e.preventDefault(); shorts.toggleMute(); return; }
   if (tab === 'tiktok' && ['ArrowDown', 'ArrowUp', 'n', 'N', 'p', 'P', ' '].includes(e.key)) {
     e.preventDefault();
@@ -567,7 +606,7 @@ document.addEventListener('keydown', e => {
     else shorts.navigate(['ArrowDown', 'n', 'N'].includes(e.key) ? 1 : -1);
     return;
   }
-  if (e.key === '/') { e.preventDefault(); $('search').focus(); } else if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+  if (e.key === '/') { e.preventDefault(); setTab('discover'); render(); $('search').focus(); } else if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
   else if (e.key.toLowerCase() === 'n') skip(1); else if (e.key.toLowerCase() === 'p') skip(-1); else if (e.key.toLowerCase() === 'm') $('muteBtn').click(); else if (e.key.toLowerCase() === 's' && current) toggle('saved', current.id);
   else if (e.key === 'ArrowRight' && current) { e.preventDefault(); seek(Math.min(currentDuration || currentPosition + 10, currentPosition + 10)); } else if (e.key === 'ArrowLeft' && current) { e.preventDefault(); seek(Math.max(0, currentPosition - 10)); }
 });
@@ -585,5 +624,6 @@ const references = new Set([...DISCOVERY_ITEMS.map(x => x.id), ...state.saved, .
 for (const x of Object.values(state.tracks)) if (x.source !== 'local' && !references.has(x.id) && Date.now() - x.fetchedAt > 30 * 86400000) { removeTrack(x.id); }
 const sharedVideo = new URLSearchParams(location.search).get('video');
 if (sharedVideo && /^[\w-]{11}$/.test(sharedVideo)) importVideo('https://www.youtube.com/watch?v=' + sharedVideo);
-else searchMusic({ phrase: '' });
+else { setTab('watch'); render(); refreshViewingFeed(); }
+setInterval(() => { if (!document.hidden && navigator.onLine && ['watch', 'tiktok'].includes(tab)) refreshViewingFeed(); }, 5 * 60 * 1000);
 api('config').then(data => { configured = data.youtubeConfigured; accessProtected = data.accessProtected; }).catch(() => {});

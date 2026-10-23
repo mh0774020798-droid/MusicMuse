@@ -1,7 +1,7 @@
 import { normalizeTrack } from './core.js';
 
 export const YOUTUBE_CHANNELS = Object.freeze([
-  { id: 'UCHwxQ7twj_VWIPMcJ3Zdyqg', name: 'ישי ריבו | Ishay Ribo', alias: 'ישי ריבו' },
+  { id: 'UCHwxQ7twj_VWIPMcJ3Zdyqg', name: 'ישי ריבו | Ishay Ribo', alias: 'ישי ריבו', embeddedUploads: true },
   { id: 'UCefarW8iWzuNO7NedV-om-w', name: 'Benny Friedman', alias: 'בני פרידמן' }
 ]);
 

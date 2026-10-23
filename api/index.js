@@ -17,7 +17,7 @@ export async function handleRequest(request, { env = process.env, fetcher = fetc
       return send({ items: [...feed.items, ...discoveryTracks('tiktok')], youtubeMode: feed.mode, tiktokMode: 'selection', channelsAvailable: feed.channelsAvailable, checkedAt: feed.checkedAt });
     }
     const key = getKey(request, env);
-    if (path === '/api/config') return send({ version: '2.3.0', youtubeConfigured: Boolean(key), youtubeSearchMode: key ? 'api' : 'collection', automaticDiscovery: true, accessProtected: Boolean(env.APP_ACCESS_TOKEN) });
+    if (path === '/api/config') return send({ version: '2.3.1', youtubeConfigured: Boolean(key), youtubeSearchMode: key ? 'api' : 'collection', automaticDiscovery: true, accessProtected: Boolean(env.APP_ACCESS_TOKEN) });
     if (path === '/api/health') return send(await checkConnections(key, fetcher));
     if (path === '/api/search') return send(await searchMusic(validateSearch(url.searchParams), key, fetcher));
     if (path === '/api/video') return send(await videoInfo(url.searchParams.get('url') || '', fetcher));

@@ -1,5 +1,6 @@
 import { escapeHtml as esc } from './core.js';
 import { tikTokPlayerURL, parseTikTokPlayerMessage } from './tiktok.js';
+import { togglePlayerSize, closePlayerSize } from './fullscreen.js';
 
 // Only the visible slide owns an iframe. Removing it also stops playback when
 // the provider cannot receive a pause message (for example during a network error).
@@ -21,6 +22,7 @@ export class TikTokFeed {
     });
     window.addEventListener('message', event => this.message(event));
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.pause(); });
+    document.addEventListener('fullscreenchange', () => this.updateControls());
   }
   render(items, { likes = [], saved = [], reducedMotion = false } = {}) {
     this.reducedMotion = reducedMotion;
@@ -53,7 +55,7 @@ export class TikTokFeed {
   }
   markup() {
     if (!this.items.length) return `<section class="shorts-empty"><div class="shorts-empty-phone"><span>♪</span><i></i><i></i><i></i></div><span class="eyebrow">A LITTLE SCROLL. A LOT OF SOUND.</span><h3>מקום לעוד צליל.</h3><p>הסרטונים שבאוסף הוסתרו או סוננו.<br>אפשר להחזיר אותם דרך הגדרות התוכן.</p><button class="primary" data-tt-action="settings">הגדרות תצוגה</button><small>הרצף נטען אוטומטית — אין צורך בחשבון, מפתח או קישור.</small></section>`;
-    return `<div class="shorts-toolbar"><div><span class="shorts-live-dot"></span><b>TikTok <span class="shorts-muse">× Music Muse</span></b><small>בחירת האתר · סרטונים מוכנים לצפייה בגלילה.</small></div><button class="secondary" data-tt-action="youtube">▶ לפיד YouTube</button></div><div class="shorts-shell"><div class="shorts-feed" tabindex="0" role="region" aria-label="סרטוני TikTok בגלילה אנכית">${this.items.map((x, i) => `<article class="shorts-slide" data-short-id="${esc(x.id)}" aria-label="סרטון ${i + 1} מתוך ${this.items.length}: ${esc(x.title)}"><div class="shorts-content"><div class="shorts-post-header"><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer"><span class="shorts-avatar">♪</span><strong>${esc(x.artist)}</strong></a><span class="shorts-source">TikTok</span></div><div class="shorts-phone"><div class="shorts-frame-host" data-frame-host="${esc(x.id)}"></div><button class="shorts-touch-zone" data-tt-action="toggle" aria-label="ניגון או השהיית הסרטון; ניתן לגלול כאן"><span class="shorts-center-play" hidden>▶</span></button><div class="shorts-player-status" role="status"><span>♪</span><p>הנגן ייטען כשהסרטון יופיע במסך</p><button class="secondary" data-tt-action="retry" hidden>ניסיון נוסף</button><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">פתיחה ב־TikTok ↗</a></div></div><div class="shorts-description"><h3>${esc(x.title)}</h3><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">הסרטון המקורי ↗</a></div></div><div class="shorts-rail"><button data-tt-action="like" data-id="${esc(x.id)}" aria-label="אהבתי את ${esc(x.title)}" aria-pressed="false"><span>♡</span><small>אהבתי</small></button><button data-tt-action="save" data-id="${esc(x.id)}" aria-label="שמירת ${esc(x.title)}" aria-pressed="false"><span>＋</span><small>שמירה</small></button><button data-tt-action="share" data-id="${esc(x.id)}" aria-label="שיתוף קישור לסרטון"><span>↗</span><small>שיתוף</small></button><button data-tt-action="menu" data-id="${esc(x.id)}" aria-label="אפשרויות לסרטון"><span>⋯</span><small>עוד</small></button><div class="shorts-swipe-hint" aria-hidden="true"><span>↕</span><small>גוללים</small></div></div></article>`).join('')}</div><div class="shorts-navigation" aria-label="מעבר בין סרטונים"><button class="icon-btn" data-tt-action="previous" aria-label="הסרטון הקודם">↑</button><span class="shorts-counter" aria-live="polite"></span><button class="icon-btn" data-tt-action="next" aria-label="הסרטון הבא">↓</button></div></div><div class="shorts-controls"><button class="secondary shorts-mute" data-tt-action="mute" aria-pressed="${this.muted}">הפעלת צליל</button><button class="secondary shorts-controls-toggle" data-tt-action="native" aria-pressed="${this.nativeControls}">פקדי הנגן</button><span>אפשר לגלול על הסרטון או ברצועה שלצדו.</span></div>`;
+    return `<div class="shorts-toolbar"><div><span class="shorts-live-dot"></span><b>TikTok <span class="shorts-muse">× Music Muse</span></b><small>בחירת האתר · סרטונים מוכנים לצפייה בגלילה.</small></div><button class="secondary" data-tt-action="youtube">▶ לפיד YouTube</button></div><div class="shorts-shell"><div class="shorts-feed" tabindex="0" role="region" aria-label="סרטוני TikTok בגלילה אנכית">${this.items.map((x, i) => `<article class="shorts-slide" data-short-id="${esc(x.id)}" aria-label="סרטון ${i + 1} מתוך ${this.items.length}: ${esc(x.title)}"><div class="shorts-content"><div class="shorts-post-header"><div class="shorts-author"><span class="shorts-avatar">♪</span><strong>${esc(x.artist)}</strong></div><span class="shorts-source">TikTok</span></div><div class="shorts-phone"><div class="shorts-frame-host" data-frame-host="${esc(x.id)}"></div><button class="shorts-touch-zone" data-tt-action="toggle" aria-label="ניגון או השהיית הסרטון; ניתן לגלול כאן"><span class="shorts-center-play" hidden>▶</span></button><div class="shorts-player-status" role="status"><span>♪</span><p>הנגן ייטען כשהסרטון יופיע במסך</p><button class="secondary" data-tt-action="retry" hidden>ניסיון נוסף</button><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">פתיחה ב־TikTok ↗</a></div></div><div class="shorts-description"><h3>${esc(x.title)}</h3><span class="shorts-credit">סרטון TikTok · ${esc(x.artist)}</span></div></div><div class="shorts-rail"><button data-tt-action="like" data-id="${esc(x.id)}" aria-label="אהבתי את ${esc(x.title)}" aria-pressed="false"><span>♡</span><small>אהבתי</small></button><button data-tt-action="save" data-id="${esc(x.id)}" aria-label="שמירת ${esc(x.title)}" aria-pressed="false"><span>＋</span><small>שמירה</small></button><button data-tt-action="share" data-id="${esc(x.id)}" aria-label="שיתוף קישור לסרטון"><span>↗</span><small>שיתוף</small></button><button data-tt-action="menu" data-id="${esc(x.id)}" aria-label="אפשרויות לסרטון"><span>⋯</span><small>עוד</small></button><div class="shorts-swipe-hint" aria-hidden="true"><span>↕</span><small>גוללים</small></div></div></article>`).join('')}</div><div class="shorts-navigation" aria-label="מעבר בין סרטונים"><button class="icon-btn" data-tt-action="previous" aria-label="הסרטון הקודם">↑</button><span class="shorts-counter" aria-live="polite"></span><button class="icon-btn" data-tt-action="next" aria-label="הסרטון הבא">↓</button></div></div><div class="shorts-controls"><button class="secondary shorts-play" data-tt-action="toggle">▶ ניגון</button><button class="secondary shorts-mute" data-tt-action="mute" aria-pressed="${this.muted}">הפעלת צליל</button><button class="secondary shorts-expand" data-tt-action="expand" aria-pressed="false">⛶ הגדלה</button><span>אפשר לגלול על הסרטון או ברצועה שלצדו.</span></div>`;
   }
   syncActions(likes, saved) {
     for (const b of this.root.querySelectorAll('[data-tt-action="like"], [data-tt-action="save"]')) {
@@ -72,7 +74,10 @@ export class TikTokFeed {
     const slide = this.root.querySelectorAll('.shorts-slide')[index];
     this.root.querySelectorAll('.shorts-slide').forEach((node, i) => node.classList.toggle('shorts-active', i === index));
     const host = slide.querySelector('.shorts-frame-host');
-    const frame = document.createElement('iframe'); frame.src = tikTokPlayerURL(this.items[index].tiktokId, { muted: this.preferredMute });
+    // Keep volume enabled in the provider. Start muted through its public API
+    // before requesting playback, so unmuting never recreates or navigates it.
+    const frame = document.createElement('iframe'); frame.src = tikTokPlayerURL(this.items[index].tiktokId);
+    frame.tabIndex = -1;
     frame.title = `TikTok — ${this.items[index].title}`; frame.allow = 'autoplay; fullscreen; encrypted-media; picture-in-picture'; frame.allowFullscreen = true; frame.referrerPolicy = 'strict-origin-when-cross-origin';
     frame.addEventListener('load', () => {
       if (this.frame !== frame) return;
@@ -93,9 +98,16 @@ export class TikTokFeed {
     clearTimeout(this.readyTimer); this.readyTimer = null;
     this.send('pause'); this.frame?.remove(); this.frame = null; this.playing = false;
   }
-  hide() { this.destroyFrame(); this.resizeObserver?.disconnect(); this.root.hidden = true; }
+  hide() { closePlayerSize(this.root); this.destroyFrame(); this.resizeObserver?.disconnect(); this.root.hidden = true; }
   pause() { this.send('pause'); this.playing = false; this.updateControls(); }
-  send(type, value) { this.frame?.contentWindow?.postMessage({ type, ...(value === undefined ? {} : { value }), 'x-tiktok-player': true }, 'https://www.tiktok.com'); }
+  send(type, value) {
+    const target = this.frame?.contentWindow; if (!target) return;
+    const message = { type, ...(value === undefined ? {} : { value }), 'x-tiktok-player': true };
+    // TikTok's deployed players use both object and JSON-string envelopes.
+    // These playback commands are idempotent; support both wire formats.
+    target.postMessage(message, 'https://www.tiktok.com');
+    target.postMessage(JSON.stringify(message), 'https://www.tiktok.com');
+  }
   showStatus(message, error = false) {
     const status = this.root.querySelectorAll('.shorts-slide')[this.index]?.querySelector('.shorts-player-status');
     if (!status) return;
@@ -123,7 +135,7 @@ export class TikTokFeed {
     else if (['onPlayerError', 'onError'].includes(message.type)) {
       clearTimeout(this.readyTimer); this.playing = false;
       const code = message.value?.errorCode ?? message.value;
-      this.showStatus(code === 3002 ? 'הדפדפן מבקש לחיצה על הניגון. הפעל את ״פקדי הנגן״ ולחץ ▶ בנגן.' : 'הסרטון אינו זמין כרגע בנגן המוטמע. אפשר לנסות שוב או לפתוח אותו ב־TikTok.', true);
+      this.showStatus(code === 3002 ? 'הדפדפן מבקש לחיצה על ▶ ניגון כאן באתר.' : 'הסרטון אינו זמין כרגע בנגן המוטמע. אפשר לנסות שוב.', true);
     }
     this.updateControls();
   }
@@ -132,8 +144,9 @@ export class TikTokFeed {
     const prev = this.root.querySelector('[data-tt-action="previous"]'), next = this.root.querySelector('[data-tt-action="next"]');
     if (prev) prev.disabled = this.index <= 0; if (next) next.disabled = this.index >= this.items.length - 1;
     const mute = this.root.querySelector('.shorts-mute'); if (mute) { mute.textContent = this.muted ? '♫ הפעלת צליל' : '⊘ השתקה'; mute.setAttribute('aria-pressed', String(this.muted)); }
-    const native = this.root.querySelector('.shorts-controls-toggle'); if (native) { native.textContent = this.nativeControls ? '↕ חזרה למצב גלילה' : 'פקדי הנגן'; native.setAttribute('aria-pressed', String(this.nativeControls)); }
-    const hint = this.root.querySelector('.shorts-controls>span'); if (hint) hint.textContent = this.nativeControls && !this.preferredMute && this.muted ? 'להפעלת צליל, לחץ גם על סמל הרמקול בנגן.' : this.nativeControls ? 'עוברים בין סרטונים בעזרת החצים או הרצועה שלצד הנגן.' : 'אפשר לגלול על הסרטון או ברצועה שלצדו.';
+    const play = this.root.querySelector('.shorts-play'); if (play) { play.textContent = this.playing ? 'Ⅱ השהיה' : '▶ ניגון'; play.setAttribute('aria-label', this.playing ? 'השהיית TikTok' : 'ניגון TikTok'); }
+    const expand = this.root.querySelector('.shorts-expand'); if (expand) { const enlarged = document.fullscreenElement === this.root || this.root.classList.contains('expanded-player'); expand.textContent = enlarged ? '⤡ הקטנה' : '⛶ הגדלה'; expand.setAttribute('aria-pressed', String(enlarged)); }
+    const hint = this.root.querySelector('.shorts-controls>span'); if (hint) hint.textContent = 'הצליל וההגדלה פועלים כאן באתר.';
     this.root.querySelectorAll('.shorts-center-play').forEach((node, i) => { node.hidden = i !== this.index || this.playing; });
   }
   focusIndex(index) {
@@ -146,11 +159,8 @@ export class TikTokFeed {
   togglePlay() { if (this.frame) this.send(this.playing ? 'pause' : 'play'); else this.activate(this.index, true); }
   toggleMute() {
     this.preferredMute = !this.muted; this.muted = this.preferredMute;
-    if (!this.muted) { this.nativeControls = true; this.root.classList.add('shorts-native-controls'); }
-    // TikTok's muted=1 URL option locks the player's volume. Recreate it with
-    // volume controls enabled after the user's explicit sound request.
-    if (!this.muted && this.frame && new URL(this.frame.src).searchParams.get('muted') === '1') this.activate(this.index, true, this.position || 0);
-    else this.send(this.muted ? 'mute' : 'unMute');
+    this.send(this.muted ? 'mute' : 'unMute');
+    if (!this.muted) this.send('play');
     this.updateControls();
   }
   click(event) {
@@ -160,7 +170,7 @@ export class TikTokFeed {
     else if (action === 'toggle') this.togglePlay();
     else if (action === 'retry') this.activate(this.index, true);
     else if (action === 'mute') this.toggleMute();
-    else if (action === 'native') { this.nativeControls = !this.nativeControls; this.root.classList.toggle('shorts-native-controls', this.nativeControls); this.updateControls(); }
+    else if (action === 'expand') { togglePlayerSize(this.root).then(() => this.updateControls()); }
     else this.callbacks[action]?.(b.dataset.id);
   }
 }

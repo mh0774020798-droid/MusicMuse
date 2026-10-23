@@ -3,10 +3,11 @@ import { loadState, saveState, fileStore } from './storage.js';
 import { parseTikTokURL, isShortTikTokURL, extractTikTokLinks } from './tiktok.js';
 import { TikTokFeed } from './shorts.js';
 import { initCreatorPromo } from './creator-promo.js';
-import { DISCOVERY_ITEMS, discoveryTracks, seedDiscovery, searchCollection } from './discovery.js';
+import { DISCOVERY_ITEMS, discoveryTracks, seedDiscovery } from './discovery.js';
 import { YouTubeFeed } from './watch-feed.js';
 import { loadYouTubeAPI as ytAPI } from './youtube.js';
 import { orderFeed, channelFeedEntries } from './feed-order.js';
+import { searchKnownVideos, resolveMusicSearch } from './search.js';
 
 const $ = id => document.getElementById(id);
 let state = loadState();
@@ -15,6 +16,7 @@ let tab = 'watch', activePlaylist = '', results = [], query = '', loading = fals
 let watchIds = orderFeed(discoveryTracks('youtube'), state.history, state.followed).map(x => x.id), watchRefreshing = false, feedNote = 'מוכן לצפייה';
 const playlistIds = new Set();
 let searchController, searchVersion = 0, lastSearch = null, lastError = '', storageWarning = false;
+let resultSource = 'youtube';
 let accessToken = '', healthReport = null, configured = false, accessProtected = false, collectionMode = true;
 let current = null, isPlaying = false, currentPosition = 0, currentDuration = 0, queueIndex = -1;
 let ytPlayer = null, ytPlayerReady = null, youtubeLoading = false, playVersion = 0, activeObjectURL = '', repeat = 'off', shuffle = false;
@@ -151,7 +153,7 @@ function render() {
   $('genre').innerHTML = '<option value="">כל הסגנונות</option>' + genres.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
   $('genre').value = genres.includes(genreValue) ? genreValue : '';
   const items = filteredItems();
-  $('resultCount').textContent = `${items.length} ${tab === 'local' ? 'קבצים' : 'פריטים'}${isRemoteTab() ? ' · ' + sourceNames[state.settings.source] + (state.settings.source === 'youtube' && collectionMode ? ' · אוסף האתר' : '') : ''}${isRemoteTab() && total > results.length ? ' · אפשר לטעון עוד' : ''}`;
+  $('resultCount').textContent = `${items.length} ${tab === 'local' ? 'קבצים' : 'פריטים'}${isRemoteTab() ? ' · ' + sourceNames[resultSource] + (resultSource === 'youtube' && collectionMode ? ' · ספריית האתר' : '') : ''}${isRemoteTab() && total > results.length ? ' · אפשר לטעון עוד' : ''}`;
   let toolbar = '';
   if (tab === 'local') toolbar = `<div class="pl-toolbar">${button('import-local', '＋ הוספת קבצים')}${button('queue-visible', '☷ הוספה לתור')}</div>`;
   if (tab === 'playlists' && activePlaylist) toolbar = `<div class="pl-toolbar">${button('all-playlists', '→ כל הפלייליסטים')}${button('queue-playlist', '▶ ניגון האוסף')}${button('rename-playlist', 'שינוי שם')}${button('export-m3u', 'ייצוא M3U8')}${button('delete-playlist', 'מחיקת האוסף', '', 'secondary danger')}</div>`;
@@ -189,28 +191,30 @@ async function searchMusic({ append = false, phrase } = {}) {
   searchController?.abort(); const controller = new AbortController(); searchController = controller; const version = ++searchVersion;
   query = baseQuery; $('search').value = baseQuery;
   const baseResults = append ? [...results] : [];
-  const opts = { q: baseQuery, source: state.settings.source, kind: kindQueries[tab] ? tab : 'all', country: state.settings.country, duration: $('duration').value, order: state.settings.sort === 'newest' ? 'date' : 'relevance', page: append ? nextPage : null, offset: append ? nextOffset : 0 };
+  const opts = { q: baseQuery, source: append ? resultSource : state.settings.source, kind: kindQueries[tab] ? tab : 'all', country: state.settings.country, duration: $('duration').value, order: state.settings.sort === 'newest' ? 'date' : 'relevance', page: append ? nextPage : null, offset: append ? nextOffset : 0 };
   if (!append) { results = []; nextPage = null; nextOffset = null; total = 0; }
   const accept = data => {
     remember(data.items); results = [...new Set([...baseResults, ...data.items.map(x => x.id)])].filter(id => track(id));
-    nextPage = data.nextPage; nextOffset = data.nextOffset; total = data.total; collectionMode = ['collection', 'channels'].includes(data.mode);
+    nextPage = data.nextPage; nextOffset = data.nextOffset; total = data.total; resultSource = data.source || opts.source; collectionMode = ['collection', 'channels'].includes(data.mode);
   };
-  const builtIn = opts.source === 'youtube' ? searchCollection(opts) : null;
+  const knownItems = Object.values(state.tracks);
+  const builtIn = opts.source === 'youtube' ? searchKnownVideos(opts, knownItems) : null;
   lastSearch = { phrase: baseQuery }; lastError = ''; loading = true; showMessage();
   // The first screen is immediately usable, even before a server or channel feed replies.
-  if (builtIn) { accept(builtIn); loading = false; }
+  if (builtIn && (builtIn.total || !baseQuery)) { accept(builtIn); loading = false; }
   render();
   try {
-    const data = await api('search', opts, controller.signal);
+    const data = await resolveMusicSearch(opts, { knownItems, signal: controller.signal, request: params => api('search', params, controller.signal) });
     if (version !== searchVersion) return;
     accept(data);
     if (baseQuery) state.searchHistory = [...new Set([baseQuery, ...state.searchHistory])].slice(0, 12);
     persist(); updateSuggestions();
-    if (state.settings.source === 'itunes') showMessage('קטלוג להיכרות עם מוזיקה. הקטעים באדיבות iTunes; לשיר המלא ולרכישה, פותחים את הקישור לחנות שעל הכרטיס.');
+    if (data.fallback === 'catalog') showMessage('לא נמצאה התאמה בסרטוני האתר. מוצגים קטעי היכרות מקטלוג iTunes, עם קישור לשיר המלא בחנות.');
+    else if (resultSource === 'itunes') showMessage('קטעי היכרות מקטלוג iTunes. לשיר המלא ולרכישה, פותחים את הקישור לחנות שעל הכרטיס.');
     else showMessage(collectionMode ? (data.mode === 'channels' ? 'ערוצי האתר התעדכנו אוטומטית. מחפשים באוסף, בוחרים סרטון ולוחצים ניגון.' : 'בחירת האתר מוכנה לצפייה. החיפוש מסנן את האוסף — בלי חשבון, מפתח או קישורים.') : 'תוצאות YouTube נטענו אוטומטית. בוחרים סרטון ולוחצים ניגון.');
   } catch (error) {
     if (controller.signal.aborted || version !== searchVersion) return;
-    if (builtIn) { accept(builtIn); persist(); showMessage('בחירת האתר מוכנה לצפייה. החיפוש מסנן את האוסף — בלי חשבון, מפתח או קישורים.'); }
+    if (builtIn?.total) { accept(builtIn); persist(); showMessage('מוצגות התאמות מספריית האתר. השירות החיצוני אינו זמין כרגע.'); }
     else if (append) toast(error.message);
     else { lastError = error.message; showMessage(error.message, 'error'); }
     if (error.code === 'ACCESS_REQUIRED') { accessProtected = true; $('statusDot').className = 'status-dot error'; }
@@ -478,7 +482,18 @@ async function readM3U(file) {
   remember(items); const p = { id: 'pl:' + crypto.randomUUID(), name: file.name.replace(/\.m3u8?$/i, ''), tracks: items.map(x => x.id), createdAt: Date.now() }; state.playlists.push(p); persist(); setTab('playlists', p.id); render(); $('m3uFile').value = ''; toast(`${items.length} סרטונים יובאו. שורות אחרות לא יובאו.`);
 }
 function settings() {
-  modal('המקום שלך, בדרך שלך', `<label class="field">אזור חיפוש<select id="countrySetting">${[['IL', 'ישראל'], ['US', 'ארצות הברית'], ['GB', 'בריטניה'], ['FR', 'צרפת'], ['CA', 'קנדה']].map(([id, label]) => `<option value="${id}" ${state.settings.country === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="check-field"><input id="resumeSetting" type="checkbox" ${state.settings.resume ? 'checked' : ''}>המשך מהמקום שעצרתי בקבצים וב־YouTube</label><label class="check-field"><input id="nextSetting" type="checkbox" ${state.settings.autoNext ? 'checked' : ''}>מעבר אוטומטי לסרטון הבא בפיד ובתור</label><label class="check-field"><input id="compactSetting" type="checkbox" ${state.settings.compact ? 'checked' : ''}>תצוגה קומפקטית</label><label class="check-field"><input id="motionSetting" type="checkbox" ${state.settings.reducedMotion ? 'checked' : ''}>צמצום תנועה ואנימציות</label><div class="dialog-actions">${button('connections', 'בדיקת זמינות השירותים')}${button('export-backup', '↓ ייצוא גיבוי')}${button('import-backup', '↑ ייבוא גיבוי')}</div><p class="form-note">גיבוי JSON שומר פלייליסטים והעדפות, ללא קבצים או מפתחות. קבצים מיובאים נשמרים בדפדפן הזה; מחיקת נתוני האתר עלולה למחוק אותם.</p><section class="settings-section"><h3>אמנים במעקב</h3><div class="manage-list">${state.followed.map((x, i) => `<button data-action="unfollow" data-index="${i}">${esc(x)} ✕</button>`).join('') || '<p>אפשר לעקוב אחרי אמן מתפריט של שיר.</p>'}</div></section><section class="settings-section"><h3>ניהול התוכן</h3><p>${state.hidden.length} פריטים מוסתרים · ${state.blocked.length} אמנים מוסתרים</p><div class="dialog-actions">${button('unhide-all', 'הצגת כל הפריטים המוסתרים')}${button('unblock-all', 'הצגת כל האמנים')}${button('clear-history', 'ניקוי היסטוריית ניגון')}${button('clear-search', 'ניקוי חיפושים אחרונים')}</div></section><section class="settings-section"><h3>נתוני המכשיר</h3><p id="storageEstimate">בודקים מקום פנוי…</p><div class="dialog-actions">${button('reset-data', 'איפוס הספרייה וההעדפות', '', 'secondary danger')}</div></section>`);
+  const source = $('source'), filters = $('filters');
+  modal('הגדרות', `<section class="settings-section settings-search"><h3>חיפוש ותצוגה</h3><div id="searchPrefsSlot"></div><p class="form-note">חיפוש בסרטוני האתר כולל גם סרטונים שנוספו לפיד. ללא התאמה יוצגו קטעי היכרות מהקטלוג. חיפוש חופשי בכל YouTube זמין אם בעל האתר הגדיר אותו.</p><label class="field">תצוגת הספרייה<select id="layoutSetting"><option value="grid">כרטיסים</option><option value="list">רשימה</option></select></label></section><section class="settings-section"><h3>ניגון</h3><label class="field">מהירות ניגון<select id="playbackSpeedSetting">${[.5,.75,1,1.25,1.5,2].map(x => `<option value="${x}">${x}×</option>`).join('')}</select></label><button class="secondary" id="preferencesSleep">טיימר שינה</button></section><label class="field">אזור חיפוש<select id="countrySetting">${[['IL', 'ישראל'], ['US', 'ארצות הברית'], ['GB', 'בריטניה'], ['FR', 'צרפת'], ['CA', 'קנדה']].map(([id, label]) => `<option value="${id}" ${state.settings.country === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="check-field"><input id="resumeSetting" type="checkbox" ${state.settings.resume ? 'checked' : ''}>המשך מהמקום שעצרתי בקבצים וב־YouTube</label><label class="check-field"><input id="nextSetting" type="checkbox" ${state.settings.autoNext ? 'checked' : ''}>מעבר אוטומטי לסרטון הבא בפיד ובתור</label><label class="check-field"><input id="compactSetting" type="checkbox" ${state.settings.compact ? 'checked' : ''}>תצוגה קומפקטית</label><label class="check-field"><input id="motionSetting" type="checkbox" ${state.settings.reducedMotion ? 'checked' : ''}>צמצום תנועה ואנימציות</label><section class="settings-section"><h3>כלים ותחזוקה</h3><div class="dialog-actions">${button('connections', 'בדיקת זמינות השירותים')}<button class="secondary" id="refreshFeedSetting">עדכון הפיד</button><button class="secondary" id="personalLinkSetting">הוספת סרטון אישי</button>${button('export-backup', '↓ ייצוא גיבוי')}${button('import-backup', '↑ ייבוא גיבוי')}</div></section><p class="form-note">גיבוי JSON שומר פלייליסטים והעדפות, ללא קבצים או מפתחות. קבצים מיובאים נשמרים בדפדפן הזה; מחיקת נתוני האתר עלולה למחוק אותם.</p><section class="settings-section"><h3>אמנים במעקב</h3><div class="manage-list">${state.followed.map((x, i) => `<button data-action="unfollow" data-index="${i}">${esc(x)} ✕</button>`).join('') || '<p>אפשר לעקוב אחרי אמן מתפריט של שיר.</p>'}</div></section><section class="settings-section"><h3>ניהול התוכן</h3><p>${state.hidden.length} פריטים מוסתרים · ${state.blocked.length} אמנים מוסתרים</p><div class="dialog-actions">${button('unhide-all', 'הצגת כל הפריטים המוסתרים')}${button('unblock-all', 'הצגת כל האמנים')}${button('clear-history', 'ניקוי היסטוריית ניגון')}${button('clear-search', 'ניקוי חיפושים אחרונים')}</div></section><section class="settings-section"><h3>נתוני המכשיר</h3><p id="storageEstimate">בודקים מקום פנוי…</p><div class="dialog-actions">${button('reset-data', 'איפוס הספרייה וההעדפות', '', 'secondary danger')}</div></section>`);
+  const sourceField = document.createElement('label'); sourceField.className = 'field'; sourceField.textContent = 'מקור חיפוש מועדף'; sourceField.append(source);
+  $('searchPrefsSlot').append(sourceField, filters); filters.hidden = false;
+  dialogCleanup = () => { $('searchForm').insertBefore(source, $('searchBtn')); $('searchOptionsHome').append(filters); filters.hidden = true; };
+  $('layoutSetting').value = state.settings.layout;
+  $('layoutSetting').onchange = e => { state.settings.layout = e.target.value; persist(); render(); };
+  $('playbackSpeedSetting').value = state.settings.speed;
+  $('playbackSpeedSetting').onchange = e => { $('speed').value = e.target.value; $('speed').onchange({ target: $('speed') }); };
+  $('preferencesSleep').onclick = sleepDialog;
+  $('personalLinkSetting').onclick = addLinkDialog;
+  $('refreshFeedSetting').onclick = async e => { const button = e.currentTarget; button.disabled = true; await refreshViewingFeed(); if (button.isConnected) { button.disabled = false; button.textContent = 'בדיקת העדכונים הסתיימה'; } };
   $('countrySetting').onchange = e => { state.settings.country = e.target.value; persist(); toast('אזור החיפוש עודכן. השינוי יחול בחיפוש הבא.'); };
   for (const [id, field] of [['resumeSetting', 'resume'], ['nextSetting', 'autoNext'], ['compactSetting', 'compact'], ['motionSetting', 'reducedMotion']]) $(id).onchange = e => { state.settings[field] = e.target.checked; persist(); applySettings(); };
   navigator.storage?.estimate?.().then(e => { if ($('storageEstimate')) $('storageEstimate').textContent = `בשימוש בדפדפן: ${Math.round((e.usage || 0) / 1024 / 1024)}MB · מכסה משוערת: ${Math.round((e.quota || 0) / 1024 / 1024)}MB`; }).catch(() => { if ($('storageEstimate')) $('storageEstimate').textContent = 'הדפדפן אינו מאפשר להעריך את המקום הפנוי.'; });

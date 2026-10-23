@@ -1,5 +1,6 @@
 import { escapeHtml as esc, videoId, normalizeTrack } from './core.js';
 import { loadYouTubeAPI, youtubeEmbedURL, channelEmbedURL } from './youtube.js';
+import { togglePlayerSize, closePlayerSize } from './fullscreen.js';
 import { mergeFeedSession } from './feed-order.js';
 
 let playerId = 0;
@@ -66,7 +67,7 @@ export class YouTubeFeed {
   }
   markup() {
     if (!this.items.length) return '<div class="empty"><div class="empty-icon">♫</div><h3>מקום לעוד מוזיקה</h3><p>הסרטונים הוסתרו בהעדפות התוכן.</p><button class="secondary" data-watch-action="settings">הגדרות תוכן</button></div>';
-    return `<div class="watch-shell"><div class="watch-viewport" tabindex="0" role="region" aria-label="פיד YouTube בגלילה">${this.items.map(item => this.slide(item)).join('')}</div><div class="watch-navigation" aria-label="מעבר בין סרטונים"><button data-watch-action="previous" aria-label="הסרטון הקודם בפיד">↑</button><span class="watch-counter" aria-live="polite"></span><button data-watch-action="next" aria-label="הסרטון הבא בפיד">↓</button></div></div><div class="watch-controls"><button class="secondary watch-play" data-watch-action="toggle">▶ ניגון</button><button class="secondary watch-mute" data-watch-action="mute" aria-pressed="true">♫ הפעלת צליל</button><button class="secondary" data-watch-action="refresh">↻ עדכון הפיד</button><span class="watch-status" role="status">הסרטון הראשון נטען אוטומטית</span></div>`;
+    return `<div class="watch-shell"><div class="watch-viewport" tabindex="0" role="region" aria-label="פיד YouTube בגלילה">${this.items.map(item => this.slide(item)).join('')}</div><div class="watch-navigation" aria-label="מעבר בין סרטונים"><button data-watch-action="previous" aria-label="הסרטון הקודם בפיד">↑</button><span class="watch-counter" aria-live="polite"></span><button data-watch-action="next" aria-label="הסרטון הבא בפיד">↓</button></div></div><div class="watch-controls"><button class="secondary watch-play" data-watch-action="toggle">▶ ניגון</button><button class="secondary watch-mute" data-watch-action="mute" aria-pressed="true">♫ הפעלת צליל</button><button class="secondary watch-expand" data-watch-action="expand">⛶ הגדלה</button><span class="watch-status" role="status">הסרטון הראשון נטען אוטומטית</span></div>`;
   }
   syncActions(likes, saved) {
     this.likes = likes; this.saved = saved;
@@ -186,13 +187,14 @@ export class YouTubeFeed {
   }
   pause() { this.intent = false; this.player?.pauseVideo?.(); this.playing = false; this.updateControls(); }
   destroyFrame() { clearTimeout(this.startTimer); const player = this.player, frame = this.frame; this.player = null; this.frame = null; this.playing = false; try { player?.destroy?.(); } catch { /* The iframe may already have been removed. */ } finally { frame?.remove(); } }
-  hide() { this.root.hidden = true; this.destroyFrame(); this.resizeObserver?.disconnect(); }
+  hide() { closePlayerSize(this.root); this.root.hidden = true; this.destroyFrame(); this.resizeObserver?.disconnect(); }
   click(event) {
     const button = event.target.closest('[data-watch-action]'); if (!button || button.disabled) return;
     const action = button.dataset.watchAction;
     if (action === 'next' || action === 'previous') this.navigate(action === 'next' ? 1 : -1);
     else if (action === 'toggle') this.togglePlay();
     else if (action === 'mute') this.toggleMute();
+    else if (action === 'expand') togglePlayerSize(this.root);
     else this.callbacks[action]?.(button.dataset.id);
   }
 }

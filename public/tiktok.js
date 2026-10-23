@@ -25,10 +25,10 @@ export function extractTikTokLinks(value) {
   }
   return [...unique.values()].slice(0, 20);
 }
-export function tikTokPlayerURL(id, { muted = true } = {}) {
+export function tikTokPlayerURL(id, { muted = false, autoplay = true, controls = false } = {}) {
   if (!/^\d{15,24}$/.test(id)) return '';
   const url = new URL(`https://www.tiktok.com/player/v1/${id}`);
-  url.search = new URLSearchParams({ autoplay: '1', muted: muted ? '1' : '0', controls: '1', description: '0', music_info: '0', rel: '0', loop: '1' });
+  url.search = new URLSearchParams({ autoplay: autoplay ? '1' : '0', muted: muted ? '1' : '0', controls: controls ? '1' : '0', description: '0', music_info: '0', rel: '0', loop: '1' });
   return url.href;
 }
 export function parseTikTokPlayerMessage(event, frameWindow) {

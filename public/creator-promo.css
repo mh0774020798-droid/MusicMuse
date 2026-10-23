@@ -95,3 +95,27 @@ body.creator-promo-visible{overflow:hidden}
 }
 @media(max-width:370px){.creator-promo h2{font-size:31px}.creator-promo-shell{padding-inline:17px}.creator-promo-email{font-size:9px}.creator-profile b{font-size:12px}}
 @media(prefers-reduced-motion:reduce){.creator-promo,.creator-promo *{animation:none!important;transition:none!important}.creator-promo-progress span{transform:scaleX(1)}}
+/* Compact creator card; the five-second lock and cooldown are unchanged. */
+.creator-promo{width:min(460px,calc(100vw - 28px));border-radius:20px}
+.creator-promo .creator-promo-shell{padding:17px 20px 19px}
+.creator-promo .creator-promo-hero{display:block;text-align:right;margin:8px 0 13px}
+.creator-promo .creator-promo-visual{display:none}
+.creator-promo .creator-promo-copy{padding:0}
+.creator-promo .creator-promo-kicker{font-size:9px;justify-content:flex-start}
+.creator-promo .creator-promo-kicker:after{display:none}
+.creator-promo h2{font-size:29px;letter-spacing:-.8px;margin:9px 0}
+.creator-promo h2 span{display:inline}
+.creator-promo .creator-promo-description{font-size:11px;line-height:1.7;max-width:none;margin:0}
+.creator-promo .creator-promo-links{gap:8px}
+.creator-promo .creator-profile{padding:9px;grid-template-columns:1fr;gap:6px;border-radius:11px}
+.creator-promo .creator-profile-icon{width:27px;height:27px;border-radius:8px}
+.creator-promo .creator-profile-icon svg{width:16px;height:16px}
+.creator-promo .creator-profile b{font-size:12px}.creator-promo .creator-profile small{font-size:8px}
+.creator-promo .creator-profile-arrow{display:none}
+.creator-promo .creator-promo-email{padding:10px 0;font-size:9px;gap:7px}
+.creator-promo .creator-promo-email span[dir=ltr]{font-size:10px;letter-spacing:0}
+.creator-promo .creator-promo-bottom{margin-top:10px;flex-direction:row;gap:10px}
+.creator-promo .creator-promo-continue{width:auto;min-width:155px;min-height:38px;padding:8px 11px;font-size:10px;gap:8px;border-radius:10px}
+.creator-promo .creator-promo-status{font-size:8px;text-align:right;min-height:0}
+.creator-promo .creator-promo-badge{font-size:9px;padding:4px 8px}
+.creator-promo .creator-promo-progress{inset-inline:20px}

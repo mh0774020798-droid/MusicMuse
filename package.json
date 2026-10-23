@@ -1,6 +1,6 @@
 {
   "name": "music-muse",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": true,
   "description": "Hebrew music discovery, official YouTube playback and a private local music library",
   "type": "module",

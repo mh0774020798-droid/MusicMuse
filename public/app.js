@@ -3,12 +3,14 @@ import { loadState, saveState, fileStore } from './storage.js';
 import { parseTikTokURL, isShortTikTokURL, extractTikTokLinks } from './tiktok.js';
 import { TikTokFeed } from './shorts.js';
 import { initCreatorPromo } from './creator-promo.js';
+import { DISCOVERY_ITEMS, seedDiscovery, searchCollection } from './discovery.js';
 
 const $ = id => document.getElementById(id);
 let state = loadState();
+if (seedDiscovery(state)) saveState(state);
 let tab = 'discover', activePlaylist = '', results = [], query = '', loading = false, nextPage = null, nextOffset = null, total = 0;
 let searchController, searchVersion = 0, lastSearch = null, lastError = '', storageWarning = false;
-let youtubeKey = '', accessToken = '', healthReport = null, configured = false;
+let accessToken = '', healthReport = null, configured = false, accessProtected = false, collectionMode = true;
 let current = null, isPlaying = false, currentPosition = 0, currentDuration = 0, queueIndex = -1;
 let ytPlayer = null, ytReady = null, ytPlayerReady = null, youtubeLoading = false, playVersion = 0, activeObjectURL = '', repeat = 'off', shuffle = false;
 let lastPositionSave = 0, sleepTimer = null, sleepUntil = 0, installPrompt = null, dialogCleanup = null, toastTimer;
@@ -20,6 +22,7 @@ const track = id => state.tracks[id];
 const button = (action, label, extra = '', cls = 'secondary') => `<button class="${cls}" data-action="${action}" ${extra}>${label}</button>`;
 const shorts = new TikTokFeed($('tiktokView'), {
   add: () => tikTokLinkDialog(),
+  settings,
   like: id => toggle('likes', id), save: id => toggle('saved', id),
   share: id => shareTrack(id), menu: id => trackMenu(id), onPlay: item => recordPlay(item),
   onActivate: () => { savePosition(); pause(); $('stage').hidden = true; }
@@ -33,7 +36,7 @@ function persist() {
 function remember(items) {
   for (const value of items) { const item = normalizeTrack(value); if (item) state.tracks[item.id] = { ...state.tracks[item.id], ...item }; }
   // Keep referenced records; bound transient search metadata.
-  const pinned = new Set([...state.likes, ...state.saved, ...state.queue, ...state.history.map(x => x.id), ...state.playlists.flatMap(x => x.tracks), ...(current ? [current.id] : [])]);
+  const pinned = new Set([...DISCOVERY_ITEMS.map(x => x.id), ...state.likes, ...state.saved, ...state.queue, ...state.history.map(x => x.id), ...state.playlists.flatMap(x => x.tracks), ...(current ? [current.id] : [])]);
   const transient = Object.values(state.tracks).filter(x => x.source !== 'local' && !pinned.has(x.id)).sort((a, b) => b.fetchedAt - a.fetchedAt);
   for (const item of transient.slice(300)) delete state.tracks[item.id];
 }
@@ -55,7 +58,7 @@ function showMessage(text = '', type = 'info') { $('message').textContent = text
 function openExternal(url) { const w = window.open(url, '_blank', 'noopener,noreferrer'); if (!w) { /* noopener can return null even on success */ } }
 async function api(endpoint, params = {}, signal) {
   const url = new URL('/api/' + endpoint, location.origin); for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined && v !== '') url.searchParams.set(k, v);
-  const headers = { Accept: 'application/json' }; if (youtubeKey) headers['x-youtube-key'] = youtubeKey; if (accessToken) headers['x-access-token'] = accessToken;
+  const headers = { Accept: 'application/json' }; if (accessToken) headers['x-access-token'] = accessToken;
   const timeout = AbortSignal.timeout(25000), requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let response;
   try { response = await fetch(url, { headers, signal: requestSignal, cache: 'no-store' }); }
@@ -66,7 +69,7 @@ async function api(endpoint, params = {}, signal) {
   return data;
 }
 function updateSuggestions() {
-  const suggestions = [...new Set([...state.searchHistory.slice(0, 3), 'אברהם פריד', 'מרדכי בן דוד', 'ישי ריבו', 'מוזיקה אקוסטית'])].slice(0, 6);
+  const suggestions = [...new Set([...state.searchHistory.slice(0, 3), 'ישי ריבו', 'בני פרידמן', 'מרדכי שפירא', 'הופעה חיה'])].slice(0, 6);
   $('suggestions').innerHTML = '<span>מתחילים עם</span>' + suggestions.map(x => `<button data-action="search-artist" data-artist="${esc(x)}">${esc(x)}</button>`).join('');
 }
 function setTab(value, playlist = '') {
@@ -96,7 +99,7 @@ function filteredItems() {
 }
 function card(x) {
   const liked = state.likes.includes(x.id), saved = state.saved.includes(x.id), preview = x.source === 'itunes';
-  const artwork = x.artwork ? `<img src="${esc(x.artwork)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '<span class="fallback-note">♫</span>';
+  const artwork = (x.artwork ? `<img src="${esc(x.artwork)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '') + '<span class="fallback-note" aria-hidden="true">♫</span>';
   const playlist = tab === 'playlists' && activePlaylist;
   return `<article class="clip ${current?.id === x.id ? 'playing-card' : ''}" data-id="${esc(x.id)}"><div class="clip-head"><div class="creator"><div class="avatar">${x.source === 'local' ? '♫' : x.source === 'youtube' ? '▶' : '♪'}</div><div><b title="${esc(x.artist)}">${esc(x.artist)}</b><small>${esc(x.source === 'local' ? 'ספרייה אישית' : x.genre || (x.publishedAt ? new Date(x.publishedAt).getFullYear() || 'מוזיקה' : 'מוזיקה'))}</small></div></div><span class="source ${x.source}">${esc(sourceNames[x.source])}</span></div><button class="artwork" data-action="play" data-id="${esc(x.id)}" aria-label="${preview ? 'השמעת קטע היכרות' : 'ניגון'}: ${esc(x.title)}">${artwork}<span class="play-overlay">▶</span>${preview ? '<span class="preview-badge">קטע היכרות</span>' : ''}<span class="duration-label">${x.duration ? formatTime(x.duration) : x.source === 'youtube' ? 'וידאו' : x.source === 'tiktok' ? 'TikTok' : 'מקומי'}</span></button><div class="details"><h3 title="${esc(x.title)}">${esc(x.title)}</h3><p>${esc(x.album || x.artist)}</p><div class="tags">${x.tags.slice(0, 2).map(t => `<span class="tag">${esc(t)}</span>`).join('')}${x.views ? `<span class="tag">${new Intl.NumberFormat('he', { notation: 'compact' }).format(x.views)} צפיות</span>` : ''}</div></div>${preview ? `<div class="card-store"><span>provided courtesy of iTunes</span><a class="store-badge" href="${esc(x.url)}" target="_blank" rel="noopener noreferrer"><small>Download on</small> iTunes</a></div>` : ''}<div class="actions"><button class="action ${liked ? 'on' : ''}" data-action="like" data-id="${esc(x.id)}" aria-pressed="${liked}">${liked ? '♥ אהבתי' : '♡ אהבתי'}</button><button class="action ${saved ? 'on' : ''}" data-action="save" data-id="${esc(x.id)}" aria-pressed="${saved}">${saved ? '✓ נשמר' : '＋ שמירה'}</button><button class="action menu-action" data-action="track-menu" data-id="${esc(x.id)}" aria-label="עוד אפשרויות: ${esc(x.title)}">⋯</button>${playlist ? `<button class="action menu-action" data-action="playlist-remove" data-id="${esc(x.id)}" aria-label="הסרה מהפלייליסט">✕</button>` : ''}</div></article>`;
 }
@@ -106,7 +109,7 @@ function render() {
   if (isTikTok) {
     const items = filteredItems();
     $('sectionTitle').textContent = 'אותה מוזיקה. תנועה חדשה.'; $('sectionEyebrow').textContent = 'SCROLL INTO YOUR NEXT FAVORITE';
-    $('resultCount').textContent = `${items.length} סרטונים · גלילה אנכית`; $('loadMore').hidden = true; $('feed').setAttribute('aria-busy', 'false');
+    $('resultCount').textContent = `${items.length} סרטונים · בחירת האתר והספרייה שלך`; $('loadMore').hidden = true; $('feed').setAttribute('aria-busy', 'false');
     shorts.render(items, { likes: state.likes, saved: state.saved, reducedMotion: state.settings.reducedMotion }); updateStats(); return;
   }
   const titles = { discover: query ? `התוצאות של ״${query}״` : 'קצת השראה, הרבה מוזיקה', live: 'האנרגיה של הופעה חיה', cover: 'שירים מוכרים, צליל חדש', official: 'לראות את המוזיקה', saved: 'המוזיקה ששמרת', liked: 'מה שעשה לך טוב', history: 'מה שהתנגן אצלך', local: 'הספרייה מהמכשיר', playlists: activePlaylist ? state.playlists.find(x => x.id === activePlaylist)?.name || 'פלייליסט' : 'האוספים שלך' };
@@ -121,7 +124,7 @@ function render() {
   $('genre').innerHTML = '<option value="">כל הסגנונות</option>' + genres.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
   $('genre').value = genres.includes(genreValue) ? genreValue : '';
   const items = filteredItems();
-  $('resultCount').textContent = `${items.length} ${tab === 'local' ? 'קבצים' : 'פריטים'}${isRemoteTab() && query ? ' · ' + sourceNames[state.settings.source] : ''}${isRemoteTab() && total > results.length ? ' · אפשר לטעון עוד' : ''}`;
+  $('resultCount').textContent = `${items.length} ${tab === 'local' ? 'קבצים' : 'פריטים'}${isRemoteTab() ? ' · ' + sourceNames[state.settings.source] + (state.settings.source === 'youtube' && collectionMode ? ' · אוסף האתר' : '') : ''}${isRemoteTab() && total > results.length ? ' · אפשר לטעון עוד' : ''}`;
   let toolbar = '';
   if (tab === 'local') toolbar = `<div class="pl-toolbar">${button('import-local', '＋ הוספת קבצים')}${button('queue-visible', '☷ הוספה לתור')}</div>`;
   if (tab === 'playlists' && activePlaylist) toolbar = `<div class="pl-toolbar">${button('all-playlists', '→ כל הפלייליסטים')}${button('queue-playlist', '▶ ניגון האוסף')}${button('rename-playlist', 'שינוי שם')}${button('export-m3u', 'ייצוא M3U8')}${button('delete-playlist', 'מחיקת האוסף', '', 'secondary danger')}</div>`;
@@ -139,25 +142,39 @@ async function searchMusic({ append = false, phrase } = {}) {
   const input = phrase ?? $('search').value.trim();
   if (parseTikTokURL(input) || isShortTikTokURL(input)) { await importTikTok(input); return; }
   if (videoId(input)) { await importVideo(input); return; }
-  const baseQuery = input || state.followed[0] || 'אברהם פריד';
+  const baseQuery = input || (state.settings.source === 'youtube' ? '' : state.followed[0] || 'אברהם פריד');
   if (!isRemoteTab()) setTab('discover');
   searchController?.abort(); const controller = new AbortController(); searchController = controller; const version = ++searchVersion;
   query = baseQuery; $('search').value = baseQuery;
+  const baseResults = append ? [...results] : [];
+  const opts = { q: baseQuery, source: state.settings.source, kind: kindQueries[tab] ? tab : 'all', country: state.settings.country, duration: $('duration').value, order: state.settings.sort === 'newest' ? 'date' : 'relevance', page: append ? nextPage : null, offset: append ? nextOffset : 0 };
   if (!append) { results = []; nextPage = null; nextOffset = null; total = 0; }
-  const opts = { q: baseQuery + (kindQueries[tab] || ''), source: state.settings.source, country: state.settings.country, duration: $('duration').value, order: state.settings.sort === 'newest' ? 'date' : 'relevance', page: append ? nextPage : null, offset: append ? nextOffset : 0 };
-  lastSearch = { phrase: baseQuery }; lastError = ''; loading = true; showMessage(); render();
+  const accept = data => {
+    remember(data.items); results = [...new Set([...baseResults, ...data.items.map(x => x.id)])].filter(id => track(id));
+    nextPage = data.nextPage; nextOffset = data.nextOffset; total = data.total; collectionMode = ['collection', 'channels'].includes(data.mode);
+  };
+  const builtIn = opts.source === 'youtube' ? searchCollection(opts) : null;
+  lastSearch = { phrase: baseQuery }; lastError = ''; loading = true; showMessage();
+  // The first screen is immediately usable, even before a server or channel feed replies.
+  if (builtIn) { accept(builtIn); loading = false; }
+  render();
   try {
     const data = await api('search', opts, controller.signal);
     if (version !== searchVersion) return;
-    remember(data.items); results = [...new Set([...results, ...data.items.map(x => x.id)])].filter(id => track(id)); nextPage = data.nextPage; nextOffset = data.nextOffset; total = data.total;
-    state.searchHistory = [...new Set([baseQuery, ...state.searchHistory])].slice(0, 12); persist(); updateSuggestions();
+    accept(data);
+    if (baseQuery) state.searchHistory = [...new Set([baseQuery, ...state.searchHistory])].slice(0, 12);
+    persist(); updateSuggestions();
     if (state.settings.source === 'itunes') showMessage('קטלוג להיכרות עם מוזיקה. הקטעים באדיבות iTunes; לשיר המלא ולרכישה, פותחים את הקישור לחנות שעל הכרטיס.');
+    else showMessage(collectionMode ? (data.mode === 'channels' ? 'ערוצי האתר התעדכנו אוטומטית. מחפשים באוסף, בוחרים סרטון ולוחצים ניגון.' : 'בחירת האתר מוכנה לצפייה. החיפוש מסנן את האוסף — בלי חשבון, מפתח או קישורים.') : 'תוצאות YouTube נטענו אוטומטית. בוחרים סרטון ולוחצים ניגון.');
   } catch (error) {
     if (controller.signal.aborted || version !== searchVersion) return;
-    if (append) { toast(error.message); } else { lastError = error.message; showMessage(error.message, 'error'); }
-    if (error.code === 'ACCESS_REQUIRED') $('statusDot').className = 'status-dot error';
+    if (builtIn) { accept(builtIn); persist(); showMessage('בחירת האתר מוכנה לצפייה. החיפוש מסנן את האוסף — בלי חשבון, מפתח או קישורים.'); }
+    else if (append) toast(error.message);
+    else { lastError = error.message; showMessage(error.message, 'error'); }
+    if (error.code === 'ACCESS_REQUIRED') { accessProtected = true; $('statusDot').className = 'status-dot error'; }
   } finally { if (version === searchVersion) { loading = false; render(); } }
 }
+
 function renderQueue() {
   $('queueList').innerHTML = state.queue.length ? state.queue.map((id, i) => {
     const x = track(id); if (!x) return '';
@@ -390,14 +407,14 @@ for (const media of [$('audio'), $('localVideo')]) {
 setInterval(updatePlayerProgress, 700);
 
 function connections() {
-  modal('כל החיבורים, במקום אחד', `<p class="dialog-copy">בדיקה אמיתית של שרת האתר, קטלוג המוזיקה ומפתח YouTube. הבדיקה אינה מבטיחה שכל סרטון או אתר חיצוני זמינים ברשת שלך.</p><label class="field">מפתח YouTube אישי (לא חובה)<input id="youtubeKey" type="password" dir="ltr" autocomplete="off" placeholder="מפתח YouTube Data API v3" value="${esc(youtubeKey)}"><small>המפתח נשמר בזיכרון הלשונית בלבד. אפשר במקום זאת להגדיר YOUTUBE_API_KEY ב־Vercel; מפתח השרת אינו נחשף למבקר.</small></label><label class="field">קוד גישה לאתר (אם הוגדר)<input id="accessToken" type="password" dir="ltr" autocomplete="off" value="${esc(accessToken)}"></label><div class="dialog-actions"><button class="primary" id="runHealth">בדיקת חיבור</button><button class="secondary" id="forgetKeys">ניקוי מפתחות מהלשונית</button></div><div id="healthResults" aria-live="polite"></div><p class="form-note" id="healthNote"></p><div class="dialog-actions">${button('export-health', 'ייצוא דוח בדיקה')}${button('help-connections', 'איך מחברים YouTube?')}</div>`);
+  modal('כל החיבורים, במקום אחד', `<p class="dialog-copy">סרטוני YouTube ו־TikTok שבאוסף נטענים אוטומטית, ללא חיבור חשבון או הזנת מפתח. כאן אפשר לבדוק את שרת האתר ואת השירותים הנוספים. זמינות כל סרטון נקבעת גם על ידי המקור והרשת.</p>${accessProtected ? `<label class="field">קוד גישה לאתר שהוגדר בידי בעל האתר<input id="accessToken" type="password" dir="ltr" autocomplete="off" value="${esc(accessToken)}"></label>` : ''}<div class="dialog-actions"><button class="primary" id="runHealth">בדיקת חיבור</button></div><div id="healthResults" aria-live="polite"></div><p class="form-note" id="healthNote"></p><div class="dialog-actions">${button('export-health', 'ייצוא דוח בדיקה')}${button('help-connections', 'איך הסרטונים נטענים?')}</div>`);
   $('runHealth').onclick = runHealth;
-  $('forgetKeys').onclick = () => { youtubeKey = ''; accessToken = ''; $('youtubeKey').value = ''; $('accessToken').value = ''; $('healthNote').textContent = 'המפתחות האישיים נוקו. הגדרות השרת נשארו כפי שהוגדרו ב־Vercel.'; };
   if (healthReport) renderHealth(); else runHealth();
 }
+
 async function runHealth() {
   const run = $('runHealth'); if (!run) return;
-  youtubeKey = $('youtubeKey').value.trim(); accessToken = $('accessToken').value.trim(); run.disabled = true; run.textContent = 'בודקים…'; $('healthResults').innerHTML = '<p class="dialog-copy">שולחים בקשת בדיקה לכל מקור…</p>';
+  if ($('accessToken')) accessToken = $('accessToken').value.trim(); run.disabled = true; run.textContent = 'בודקים…'; $('healthResults').innerHTML = '<p class="dialog-copy">שולחים בקשת בדיקה לכל מקור…</p>';
   const start = performance.now();
   try { healthReport = await api('health'); configured = healthReport.youtubeConfigured; const server = healthReport.checks.find(x => x.id === 'server'); if (server) server.latency = Math.round(performance.now() - start); }
   catch (error) { healthReport = { checkedAt: new Date().toISOString(), version: VERSION, checks: [{ id: 'server', status: 'error', message: error.message, code: error.code || 'NETWORK_ERROR', latency: Math.round(performance.now() - start) }] }; }
@@ -406,10 +423,10 @@ async function runHealth() {
   if ($('runHealth') === run) { run.disabled = false; run.textContent = 'בדיקה חוזרת'; }
 }
 function renderHealth() {
-  const names = { server: 'שרת Music Muse', catalog: 'קטלוג iTunes', youtube: 'YouTube Data API' };
+  const names = { server: 'שרת Music Muse', catalog: 'קטלוג iTunes', youtube: 'חיפוש מורחב ב־YouTube — אופציונלי לבעל האתר' };
   if (!$('healthResults')) return;
   $('healthResults').innerHTML = healthReport.checks.map(x => `<div class="connection-check"><span class="check-dot ${x.status}">${x.status === 'ok' ? '✓' : x.status === 'unconfigured' ? '−' : '!'}</span><div><b>${esc(names[x.id] || x.id)}</b><small>${esc(x.message)}</small></div><time dir="ltr">${x.latency} ms</time></div>`).join('');
-  $('healthNote').textContent = 'נבדק ב־' + new Date(healthReport.checkedAt).toLocaleString('he-IL') + (configured ? ' · מפתח YouTube מוגדר' : ' · אפשר להשתמש בקטלוג, בקישורים ובקבצים אישיים ללא מפתח חיפוש');
+  $('healthNote').textContent = 'נבדק ב־' + new Date(healthReport.checkedAt).toLocaleString('he-IL') + (configured ? ' · חיפוש מורחב זמין אוטומטית לכל המבקרים' : ' · הצפייה והחיפוש באוסף האתר זמינים ללא חיבור חשבון או מפתח');
 }
 function download(content, filename, type) { const u = URL.createObjectURL(new Blob([content], { type })); const a = document.createElement('a'); a.href = u; a.download = filename; a.click(); setTimeout(() => URL.revokeObjectURL(u), 2000); }
 function exportBackup() { download(JSON.stringify({ ...state, exportedAt: new Date().toISOString(), app: 'Music Muse', version: VERSION }, null, 2), 'MusicMuse-backup.json', 'application/json'); toast('הגיבוי כולל העדפות ומידע על השירים. קובצי השמע עצמם אינם כלולים.'); }
@@ -429,15 +446,16 @@ async function readM3U(file) {
   remember(items); const p = { id: 'pl:' + crypto.randomUUID(), name: file.name.replace(/\.m3u8?$/i, ''), tracks: items.map(x => x.id), createdAt: Date.now() }; state.playlists.push(p); persist(); setTab('playlists', p.id); render(); $('m3uFile').value = ''; toast(`${items.length} סרטונים יובאו. שורות אחרות לא יובאו.`);
 }
 function settings() {
-  modal('המקום שלך, בדרך שלך', `<label class="field">אזור חיפוש<select id="countrySetting">${[['IL', 'ישראל'], ['US', 'ארצות הברית'], ['GB', 'בריטניה'], ['FR', 'צרפת'], ['CA', 'קנדה']].map(([id, label]) => `<option value="${id}" ${state.settings.country === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="check-field"><input id="resumeSetting" type="checkbox" ${state.settings.resume ? 'checked' : ''}>המשך מהמקום שעצרתי בקבצים וב־YouTube</label><label class="check-field"><input id="nextSetting" type="checkbox" ${state.settings.autoNext ? 'checked' : ''}>מעבר אוטומטי לפריט הבא בתור</label><label class="check-field"><input id="compactSetting" type="checkbox" ${state.settings.compact ? 'checked' : ''}>תצוגה קומפקטית</label><label class="check-field"><input id="motionSetting" type="checkbox" ${state.settings.reducedMotion ? 'checked' : ''}>צמצום תנועה ואנימציות</label><div class="dialog-actions">${button('connections', 'חיבורים ובדיקת מפתח')}${button('export-backup', '↓ ייצוא גיבוי')}${button('import-backup', '↑ ייבוא גיבוי')}</div><p class="form-note">גיבוי JSON שומר פלייליסטים והעדפות, ללא קבצים או מפתחות. קבצים מיובאים נשמרים בדפדפן הזה; מחיקת נתוני האתר עלולה למחוק אותם.</p><section class="settings-section"><h3>אמנים במעקב</h3><div class="manage-list">${state.followed.map((x, i) => `<button data-action="unfollow" data-index="${i}">${esc(x)} ✕</button>`).join('') || '<p>אפשר לעקוב אחרי אמן מתפריט של שיר.</p>'}</div></section><section class="settings-section"><h3>ניהול התוכן</h3><p>${state.hidden.length} פריטים מוסתרים · ${state.blocked.length} אמנים מוסתרים</p><div class="dialog-actions">${button('unhide-all', 'הצגת כל הפריטים המוסתרים')}${button('unblock-all', 'הצגת כל האמנים')}${button('clear-history', 'ניקוי היסטוריית ניגון')}${button('clear-search', 'ניקוי חיפושים אחרונים')}</div></section><section class="settings-section"><h3>נתוני המכשיר</h3><p id="storageEstimate">בודקים מקום פנוי…</p><div class="dialog-actions">${button('reset-data', 'איפוס הספרייה וההעדפות', '', 'secondary danger')}</div></section>`);
+  modal('המקום שלך, בדרך שלך', `<label class="field">אזור חיפוש<select id="countrySetting">${[['IL', 'ישראל'], ['US', 'ארצות הברית'], ['GB', 'בריטניה'], ['FR', 'צרפת'], ['CA', 'קנדה']].map(([id, label]) => `<option value="${id}" ${state.settings.country === id ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="check-field"><input id="resumeSetting" type="checkbox" ${state.settings.resume ? 'checked' : ''}>המשך מהמקום שעצרתי בקבצים וב־YouTube</label><label class="check-field"><input id="nextSetting" type="checkbox" ${state.settings.autoNext ? 'checked' : ''}>מעבר אוטומטי לפריט הבא בתור</label><label class="check-field"><input id="compactSetting" type="checkbox" ${state.settings.compact ? 'checked' : ''}>תצוגה קומפקטית</label><label class="check-field"><input id="motionSetting" type="checkbox" ${state.settings.reducedMotion ? 'checked' : ''}>צמצום תנועה ואנימציות</label><div class="dialog-actions">${button('connections', 'בדיקת זמינות השירותים')}${button('export-backup', '↓ ייצוא גיבוי')}${button('import-backup', '↑ ייבוא גיבוי')}</div><p class="form-note">גיבוי JSON שומר פלייליסטים והעדפות, ללא קבצים או מפתחות. קבצים מיובאים נשמרים בדפדפן הזה; מחיקת נתוני האתר עלולה למחוק אותם.</p><section class="settings-section"><h3>אמנים במעקב</h3><div class="manage-list">${state.followed.map((x, i) => `<button data-action="unfollow" data-index="${i}">${esc(x)} ✕</button>`).join('') || '<p>אפשר לעקוב אחרי אמן מתפריט של שיר.</p>'}</div></section><section class="settings-section"><h3>ניהול התוכן</h3><p>${state.hidden.length} פריטים מוסתרים · ${state.blocked.length} אמנים מוסתרים</p><div class="dialog-actions">${button('unhide-all', 'הצגת כל הפריטים המוסתרים')}${button('unblock-all', 'הצגת כל האמנים')}${button('clear-history', 'ניקוי היסטוריית ניגון')}${button('clear-search', 'ניקוי חיפושים אחרונים')}</div></section><section class="settings-section"><h3>נתוני המכשיר</h3><p id="storageEstimate">בודקים מקום פנוי…</p><div class="dialog-actions">${button('reset-data', 'איפוס הספרייה וההעדפות', '', 'secondary danger')}</div></section>`);
   $('countrySetting').onchange = e => { state.settings.country = e.target.value; persist(); toast('אזור החיפוש עודכן. השינוי יחול בחיפוש הבא.'); };
   for (const [id, field] of [['resumeSetting', 'resume'], ['nextSetting', 'autoNext'], ['compactSetting', 'compact'], ['motionSetting', 'reducedMotion']]) $(id).onchange = e => { state.settings[field] = e.target.checked; persist(); applySettings(); };
   navigator.storage?.estimate?.().then(e => { if ($('storageEstimate')) $('storageEstimate').textContent = `בשימוש בדפדפן: ${Math.round((e.usage || 0) / 1024 / 1024)}MB · מכסה משוערת: ${Math.round((e.quota || 0) / 1024 / 1024)}MB`; }).catch(() => { if ($('storageEstimate')) $('storageEstimate').textContent = 'הדפדפן אינו מאפשר להעריך את המקום הפנוי.'; });
   if (!navigator.storage?.estimate) $('storageEstimate').textContent = 'הדפדפן אינו מציג נתוני אחסון.';
 }
 function help(connectionsOnly = false) {
-  modal(connectionsOnly ? 'חיבור YouTube בשלושה צעדים' : 'כמה דברים שיעזרו להקשיב', `<div class="dialog-copy"><p>הקטלוג מציג תוצאות אמיתיות וקטעי היכרות שמפנים לשיר המלא ב־iTunes. סרטוני YouTube מתנגנים בנגן הרשמי. קבצים מהמכשיר מתנגנים מקומית.</p><p><b>חיפוש YouTube:</b> פותחים פרויקט ב־<a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer">Google Cloud</a>, מפעילים YouTube Data API v3 ויוצרים API Key. מגבילים את המפתח ל־YouTube Data API v3. מפתח לשרת מוסיפים ב־Vercel בשם YOUTUBE_API_KEY ואז מבצעים Redeploy. אפשר להזין מפתח אישי בחלון החיבורים למשך הלשונית.</p><p>מפתחות חיפוש כפופים למכסה בחשבון Google. הגבלות HTTP Referrer על מפתח דפדפן אינן מתאימות לבקשות מהשרת; אפשר להשתמש בהגבלות שמתאימות לסביבת השרת.</p><p><b>ללא מפתח:</b> אפשר לחפש בקטלוג, להוסיף קישור ישיר ל־YouTube ולייבא קבצים. TikTok וקופיקו נפתחים באתרים שלהם. טעינת וידאו תלויה בספק, באזור וברשת.</p><p><b>ללא אינטרנט:</b> לאחר ביקור ראשון, ממשק האתר והקבצים שהוספת זמינים במכשיר בכפוף לאחסון הדפדפן. שירותי מוזיקה חיצוניים דורשים חיבור. התקנת PWA זמינה בדפדפנים תומכים וב־HTTPS.</p><p><b>שיתוף וגיבוי:</b> נתוני הספרייה שייכים לדפדפן הזה. גיבוי JSON מעביר מידע והעדפות; הוא אינו כולל קובצי מדיה. קטעי iTunes אינם נשמרים או מורדים.</p></div>${connectionsOnly ? '' : '<div class="shortcut"><span>ניגון / השהיה</span><kbd>Space</kbd></div><div class="shortcut"><span>חיפוש</span><kbd>/</kbd></div><div class="shortcut"><span>השיר הבא / הקודם</span><kbd>N / P</kbd></div><div class="shortcut"><span>קפיצה של 10 שניות</span><kbd>→ / ←</kbd></div><div class="shortcut"><span>השתקה</span><kbd>M</kbd></div><div class="shortcut"><span>שמירת הפריט הנוכחי</span><kbd>S</kbd></div>'}`);
+  modal(connectionsOnly ? 'פשוט לבחור סרטון ולנגן' : 'כמה דברים שיעזרו להקשיב', `<div class="dialog-copy"><p><b>מוכנים לצפייה:</b> אוסף סרטוני YouTube נטען כבר בכניסה. בלשונית TikTok מחכה רצף מוכן בגלילה אנכית. אין צורך להיכנס לחשבון, להזין מפתח או להדביק קישור.</p><p><b>עדכון אוטומטי:</b> שרת האתר בודק את העדכונים הציבוריים של ערוצי המוזיקה שנבחרו. כשאי אפשר לעדכן, מוצג האוסף המובנה. TikTok מציג את בחירת האתר ואת הסרטונים שהוספת מרצונך; זהו אוסף האתר ואינו פיד ההמלצות האישי של TikTok.</p><p><b>חיפוש:</b> ללא הגדרה נוספת מחפשים באוסף האתר. אם בעל האתר הגדיר מפתח חיפוש בשרת, חיפוש YouTube המורחב זמין למבקרים אוטומטית. ניגון האוסף אינו דורש מפתח.</p><p><b>ספרייה אישית:</b> אפשר לשמור, לסמן אהבתי, ליצור אוספים ולהוסיף קבצים מהמכשיר. הוספת קישור אישי נשארת אפשרות נוספת בלבד.</p><p><b>ניגון:</b> הסרטונים מוצגים בנגנים הרשמיים. סרטון פרטי, מוסר, מוגבל באזור או חסום ברשת עשוי שלא להתנגן. בנגן ניתן להפעיל צליל ולצפות במסך מלא.</p><p><b>גיבוי וללא חיבור:</b> הספרייה נשמרת בדפדפן הזה. גיבוי JSON שומר מידע והעדפות, ללא קובצי המדיה. סרטונים חיצוניים דורשים חיבור לאינטרנט; קבצים אישיים שכבר נוספו זמינים מקומית.</p></div>${connectionsOnly ? '' : '<div class="shortcut"><span>ניגון / השהיה</span><kbd>Space</kbd></div><div class="shortcut"><span>חיפוש</span><kbd>/</kbd></div><div class="shortcut"><span>השיר הבא / הקודם</span><kbd>N / P</kbd></div><div class="shortcut"><span>קפיצה של 10 שניות</span><kbd>→ / ←</kbd></div><div class="shortcut"><span>השתקה</span><kbd>M</kbd></div><div class="shortcut"><span>שמירת הפריט הנוכחי</span><kbd>S</kbd></div>'}`);
 }
+
 function sleepDialog() {
   modal('להירדם עם הצליל הנכון', `<p class="dialog-copy">${sleepUntil ? 'הניגון ייעצר ב־' + new Date(sleepUntil).toLocaleTimeString('he', { hour: '2-digit', minute: '2-digit' }) : 'בוחרים בעוד כמה זמן הניגון ייעצר בלשונית הזו.'}</p><div class="sleep-buttons">${[5, 15, 30, 45, 60, 90].map(x => button('set-sleep', x + ' דקות', `data-minutes="${x}"`)).join('')}</div><div class="dialog-actions">${button('cancel-sleep', 'ביטול הטיימר')}</div>`);
 }
@@ -483,7 +501,7 @@ const actions = {
   'export-m3u': () => { const p = state.playlists.find(x => x.id === activePlaylist); if (!p) return; download(toM3U(p.tracks.map(track).filter(Boolean), p.name), p.name.replace(/[<>:"/\\|?*]/g, '-') + '.m3u8', 'audio/x-mpegurl;charset=utf-8'); toast('הקובץ כולל קישורים ושמות קבצים. לא כל נגן חיצוני תומך בקישורי YouTube.'); },
   'import-m3u': () => $('m3uFile').click(), 'import-local': () => $('localFiles').click(),
   'delete-local': el => { const x = track(el.dataset.id); if (x) confirmDialog('מחיקת עותק מקומי', `למחוק את העותק של ״${x.title}״ מהדפדפן? הקובץ המקורי במכשיר לא יימחק.`, async () => { if (current?.id === x.id) stopPlayer(); await fileStore.remove(x.id); removeTrack(x.id); persist(); render(); toast('העותק הוסר מהדפדפן'); }); },
-  'go-discover': () => { setTab('discover'); return searchMusic(); }, 'retry': () => searchMusic(lastSearch || {}),
+  'go-discover': () => { setTab('discover'); state.settings.source = 'youtube'; $('source').value = 'youtube'; persist(); return searchMusic({ phrase: '' }); }, 'retry': () => searchMusic(lastSearch || {}),
   'clear-filters': () => { $('localFilter').value = ''; $('duration').value = 'any'; $('genre').value = ''; render(); },
   connections, 'help-connections': () => help(true), 'export-backup': exportBackup,
   'import-backup': () => $('backupFile').click(), 'close-dialog': closeDialog,
@@ -492,7 +510,7 @@ const actions = {
   'unhide-all': () => { state.hidden = []; persist(); render(); settings(); }, 'unblock-all': () => { state.blocked = []; persist(); render(); settings(); },
   'clear-history': () => confirmDialog('ניקוי היסטוריית הניגון', 'הפעולה תמחק את רשימת הפריטים שהתנגנו במכשיר הזה.', () => { state.history = []; persist(); render(); toast('היסטוריית הניגון נוקתה'); }),
   'clear-search': () => { state.searchHistory = []; persist(); updateSuggestions(); toast('החיפושים האחרונים נוקו'); },
-  'reset-data': () => confirmDialog('איפוס הספרייה במכשיר הזה', 'כל הפלייליסטים, השמורים, ההעדפות והעותקים של קובצי המדיה בדפדפן יימחקו. מומלץ לייצא גיבוי תחילה. הקבצים המקוריים במכשיר אינם מושפעים.', async () => { stopPlayer(); await fileStore.clear(); state = emptyState(); persist(); applySettings(); updateSuggestions(); setSleep(0); setTab('discover'); results = []; await searchMusic({ phrase: 'אברהם פריד' }); toast('נתוני הספרייה אופסו'); }),
+  'reset-data': () => confirmDialog('איפוס הספרייה במכשיר הזה', 'כל הפלייליסטים, השמורים, ההעדפות והעותקים של קובצי המדיה בדפדפן יימחקו. מומלץ לייצא גיבוי תחילה. הקבצים המקוריים במכשיר אינם מושפעים.', async () => { stopPlayer(); await fileStore.clear(); state = emptyState(); seedDiscovery(state); persist(); applySettings(); updateSuggestions(); setSleep(0); setTab('discover'); results = []; await searchMusic({ phrase: '' }); toast('נתוני הספרייה אופסו'); }),
   'set-sleep': el => setSleep(Number(el.dataset.minutes)), 'cancel-sleep': () => setSleep(0)
 };
 async function playPlaylist(id) {
@@ -507,6 +525,7 @@ document.addEventListener('click', async e => {
   try { await action(el); } catch (error) { toast(error.message || 'הפעולה לא הושלמה.'); }
 });
 $('searchForm').onsubmit = e => { e.preventDefault(); setTab('discover'); searchMusic(); };
+$('feed').addEventListener('error', e => { if (e.target instanceof HTMLImageElement && e.target.closest('.artwork')) e.target.remove(); }, true);
 $('tabs').onclick = e => { const b = e.target.closest('[data-tab]'); if (!b) return; setTab(b.dataset.tab); if (kindQueries[tab]) { state.settings.source = 'youtube'; $('source').value = 'youtube'; persist(); searchMusic(); } else if (tab === 'discover') searchMusic(); else render(); };
 $('source').onchange = e => { state.settings.source = e.target.value; persist(); if (isRemoteTab()) searchMusic(); };
 $('sort').onchange = e => { state.settings.sort = e.target.value; persist(); render(); };
@@ -514,8 +533,8 @@ $('duration').onchange = () => { if (isRemoteTab() && state.settings.source === 
 $('genre').onchange = render; $('localFilter').oninput = render;
 $('layoutBtn').onclick = () => { state.settings.layout = state.settings.layout === 'grid' ? 'list' : 'grid'; persist(); render(); };
 $('loadMore').onclick = () => searchMusic({ append: true });
-$('homeBtn').onclick = () => { setTab('discover'); searchMusic({ phrase: state.searchHistory[0] || 'אברהם פריד' }); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-$('discoverBtn').onclick = () => { setTab('discover'); searchMusic({ phrase: state.followed[0] || ['מרדכי בן דוד', 'אברהם פריד', 'ישי ריבו'][Math.floor(Math.random() * 3)] }); $('search').focus(); };
+$('homeBtn').onclick = () => { setTab('discover'); state.settings.source = 'youtube'; $('source').value = 'youtube'; persist(); searchMusic({ phrase: '' }); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+$('discoverBtn').onclick = () => { setTab('discover'); searchMusic({ phrase: state.followed[0] || '' }); $('search').focus(); };
 $('savedTop').onclick = () => { setTab('saved'); render(); $('content').scrollIntoView({ behavior: 'smooth' }); };
 $('connectionBtn').onclick = connections; $('settingsBtn').onclick = settings; $('helpBtn').onclick = () => help(); $('tasteBtn').onclick = taste; $('addLinkBtn').onclick = addLinkDialog;
 $('importLocalTop').onclick = () => $('localFiles').click(); $('localFiles').onchange = e => importFiles(e.target.files);
@@ -562,9 +581,9 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localho
 applySettings(); updateSuggestions(); updateStats();
 initCreatorPromo($('creatorPromo'));
 // Remove old unreferenced API metadata after 30 days; user-owned local media is retained.
-const references = new Set([...state.saved, ...state.likes, ...state.queue, ...state.playlists.flatMap(x => x.tracks)]);
+const references = new Set([...DISCOVERY_ITEMS.map(x => x.id), ...state.saved, ...state.likes, ...state.queue, ...state.playlists.flatMap(x => x.tracks)]);
 for (const x of Object.values(state.tracks)) if (x.source !== 'local' && !references.has(x.id) && Date.now() - x.fetchedAt > 30 * 86400000) { removeTrack(x.id); }
 const sharedVideo = new URLSearchParams(location.search).get('video');
 if (sharedVideo && /^[\w-]{11}$/.test(sharedVideo)) importVideo('https://www.youtube.com/watch?v=' + sharedVideo);
-else searchMusic({ phrase: state.searchHistory[0] || 'אברהם פריד' });
-api('config').then(data => { configured = data.youtubeConfigured; }).catch(() => {});
+else searchMusic({ phrase: '' });
+api('config').then(data => { configured = data.youtubeConfigured; accessProtected = data.accessProtected; }).catch(() => {});

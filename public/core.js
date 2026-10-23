@@ -1,7 +1,7 @@
 import { parseTikTokURL } from './tiktok.js';
 
-export const VERSION = '2.1.1';
-export const DEFAULT_SETTINGS = Object.freeze({ source: 'itunes', country: 'IL', layout: 'grid', sort: 'relevance', volume: .75, speed: 1, resume: true, autoNext: true, compact: false, reducedMotion: false });
+export const VERSION = '2.2.0';
+export const DEFAULT_SETTINGS = Object.freeze({ source: 'youtube', discoveryReady: false, country: 'IL', layout: 'grid', sort: 'relevance', volume: .75, speed: 1, resume: true, autoNext: true, compact: false, reducedMotion: false });
 export const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export function formatTime(seconds) {
   if (!Number.isFinite(Number(seconds)) || seconds < 0) return '0:00';
@@ -53,7 +53,7 @@ export function sanitizeState(input) {
   result.playlists = (Array.isArray(input.playlists) ? input.playlists : []).filter(x => x && /^pl:[\w-]+$/.test(x.id) && typeof x.name === 'string').slice(0, 100).map(x => ({ id: x.id, name: x.name.slice(0, 80), tracks: stringList(x.tracks).filter(known), createdAt: Number(x.createdAt) || Date.now() }));
   if (input.positions && typeof input.positions === 'object') for (const [id, pos] of Object.entries(input.positions).slice(0, 1000)) if (known(id) && Number.isFinite(pos) && pos >= 0) result.positions[id] = Math.min(pos, 604800);
   const s = input.settings || {};
-  for (const k of ['resume', 'autoNext', 'compact', 'reducedMotion']) if (typeof s[k] === 'boolean') result.settings[k] = s[k];
+  for (const k of ['resume', 'autoNext', 'compact', 'reducedMotion', 'discoveryReady']) if (typeof s[k] === 'boolean') result.settings[k] = s[k];
   for (const [k, allowed] of Object.entries({ source: ['itunes', 'youtube'], country: ['IL', 'US', 'GB', 'FR', 'CA'], layout: ['grid', 'list'], sort: ['relevance', 'title', 'newest', 'duration'] })) if (allowed.includes(s[k])) result.settings[k] = s[k];
   if (Number.isFinite(s.volume)) result.settings.volume = Math.min(1, Math.max(0, s.volume));
   if ([.5, .75, 1, 1.25, 1.5, 2].includes(s.speed)) result.settings.speed = s.speed;

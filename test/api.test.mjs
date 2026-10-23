@@ -21,8 +21,9 @@ test('search validates query, source, offset and continuation tokens', async () 
     const res = await handleRequest(request(route), { env: {}, fetcher: () => { throw new Error('should not fetch'); } }); assert.equal(res.status, 400, route);
   }
 });
-test('missing YouTube key is actionable and does not masquerade as working search', async () => {
-  const res = await handleRequest(request('/api/search?q=music&source=youtube'), { env: {} }); assert.equal(res.status, 503); assert.equal((await res.json()).error.code, 'KEY_REQUIRED');
+test('without a YouTube key visitors can browse and search the clearly labeled site collection', async () => {
+  const res = await handleRequest(request('/api/search?q=&source=youtube'), { env: {}, fetcher: async url => { assert.equal(new URL(url).hostname, 'www.youtube.com'); throw new Error('RSS unavailable'); } });
+  const data = await res.json(); assert.equal(res.status, 200); assert.equal(data.mode, 'collection'); assert.ok(data.items.length > 0); assert.ok(data.items.every(x => x.source === 'youtube')); assert.equal(data.channelsAvailable, 0);
 });
 test('catalog search maps real provider data, excludes explicit tracks and paginates', async () => {
   const rows = Array.from({ length: 25 }, (_, i) => ({ kind: 'song', trackId: 4000 + i, trackName: 'Song ' + i, artistName: 'Singer', trackViewUrl: 'https://music.apple.com/il/song/' + (4000 + i), artworkUrl100: 'https://is1-ssl.mzstatic.com/image/100x100bb.jpg', previewUrl: 'https://audio-ssl.itunes.apple.com/preview.m4a', trackTimeMillis: 180000, trackExplicitness: i === 2 ? 'explicit' : 'notExplicit', primaryGenreName: 'World' }));

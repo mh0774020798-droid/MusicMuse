@@ -14,7 +14,7 @@ test('imports cannot inject arbitrary media URLs or overwrite application object
   const item = normalizeTrack({ source: 'itunes', id: 'itunes:12', url: 'https://music.apple.com/il/song/12', previewUrl: 'https://evil.test/media', artwork: 'javascript:alert(1)' });
   assert.equal(item.previewUrl, ''); assert.equal(item.artwork, '');
   const clean = sanitizeState(JSON.parse('{"tracks":{"__proto__":{"source":"local","id":"__proto__"}},"settings":{"volume":500,"source":"malware"}}'));
-  assert.equal(Object.keys(clean.tracks).length, 0); assert.equal(clean.settings.volume, 1); assert.equal(clean.settings.source, 'itunes');
+  assert.equal(Object.keys(clean.tracks).length, 0); assert.equal(clean.settings.volume, 1); assert.equal(clean.settings.source, 'youtube');
 });
 test('backup round trip preserves saved search results, playlists, queue and resume positions', () => {
   const state = emptyState(), item = yt(); state.tracks[item.id] = item; state.saved = [item.id]; state.likes = [item.id]; state.queue = [item.id]; state.positions[item.id] = 125; state.playlists.push({ id: 'pl:one', name: 'שירים', tracks: [item.id], createdAt: 1 });
